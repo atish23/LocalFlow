@@ -15,8 +15,6 @@ public struct LocalFlowConfig: Codable {
             headless: false,
             sound_effects: true,
             personal_dictionary: [
-                "Atish",
-                "Antigravity",
                 "LocalFlow",
                 "Wispr",
                 "Kubernetes",
