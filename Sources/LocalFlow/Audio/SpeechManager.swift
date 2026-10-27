@@ -12,10 +12,11 @@ public final class SpeechManager: NSObject {
     public var onAudioLevel: ((Float) -> Void)?
     public private(set) var isRecording = false
     
-    private var committedText = ""
-    private var currentUtteranceText = ""
+    private var committedSegments: [String] = []
+    private var currentTaskText: String = ""
     private var lastLevelDispatchTime: TimeInterval = 0
     private var lastVoiceDetectedTime: TimeInterval = 0
+    private var stopCompletion: ((String) -> Void)?
 
     public override init() {
         super.init()
@@ -36,35 +37,35 @@ public final class SpeechManager: NSObject {
     }
 
     public func currentFullTranscript() -> String {
-        let committed = committedText.trimmingCharacters(in: .whitespacesAndNewlines)
-        let current = currentUtteranceText.trimmingCharacters(in: .whitespacesAndNewlines)
-        if committed.isEmpty { return current }
-        if current.isEmpty { return committed }
-        if current.lowercased().hasPrefix(committed.lowercased()) {
-            return current
-        }
-        return "\(committed) \(current)"
-    }
-
-    private func commitCurrentUtterance() {
-        let trimmed = currentUtteranceText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return }
-        if committedText.isEmpty {
-            committedText = trimmed
-        } else {
-            if !committedText.hasSuffix(trimmed) {
-                committedText += " " + trimmed
+        var segments = committedSegments
+        let current = currentTaskText.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !current.isEmpty {
+            if let last = segments.last, current.hasPrefix(last) {
+                segments[segments.count - 1] = current
+            } else if segments.last != current {
+                segments.append(current)
             }
         }
-        currentUtteranceText = ""
+        return segments.joined(separator: " ").trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private func commitSegment(_ text: String) {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        if let last = committedSegments.last, trimmed.hasPrefix(last) {
+            committedSegments[committedSegments.count - 1] = trimmed
+        } else if committedSegments.last != trimmed {
+            committedSegments.append(trimmed)
+        }
     }
 
     public func startRecording(completion: @escaping (Result<Void, Error>) -> Void) {
         guard !isRecording else { return }
         
         cleanupRecording()
-        committedText = ""
-        currentUtteranceText = ""
+        committedSegments.removeAll()
+        currentTaskText = ""
+        stopCompletion = nil
         lastVoiceDetectedTime = Date().timeIntervalSince1970
 
         recognitionRequest = SFSpeechAudioBufferRecognitionRequest()
@@ -107,24 +108,21 @@ public final class SpeechManager: NSObject {
                 let text = result.bestTranscription.formattedString.trimmingCharacters(in: .whitespacesAndNewlines)
                 let now = Date().timeIntervalSince1970
 
-                // Detect if Apple's recognizer reset its formattedString after a silence pause
-                // (i.e. New utterance started, text is disjoint from previous utterance)
-                let isDisjoint = !self.currentUtteranceText.isEmpty &&
-                                 !text.lowercased().hasPrefix(self.currentUtteranceText.lowercased()) &&
-                                 !self.currentUtteranceText.lowercased().hasPrefix(text.lowercased())
+                // Check if Apple's recognizer reset its formattedString after a silence pause
+                let isDisjoint = !self.currentTaskText.isEmpty &&
+                                 !text.lowercased().hasPrefix(self.currentTaskText.lowercased()) &&
+                                 !self.currentTaskText.lowercased().hasPrefix(text.lowercased())
 
-                // Disjoint text after a pause of silence (>0.5s) or massive length drop means previous sentence completed
-                if isDisjoint && (now - self.lastVoiceDetectedTime > 0.5 || text.count < max(1, self.currentUtteranceText.count / 2)) {
-                    self.commitCurrentUtterance()
+                // Disjoint text after silence (>=0.5s) means previous sentence finished
+                if isDisjoint && (now - self.lastVoiceDetectedTime > 0.5 || text.count < max(1, self.currentTaskText.count / 2)) {
+                    self.commitSegment(self.currentTaskText)
                 }
 
+                self.currentTaskText = text
+
                 if result.isFinal {
-                    if !text.isEmpty {
-                        self.currentUtteranceText = text
-                        self.commitCurrentUtterance()
-                    }
-                } else {
-                    self.currentUtteranceText = text
+                    self.commitSegment(text)
+                    self.currentTaskText = ""
                 }
 
                 let full = self.currentFullTranscript()
@@ -133,11 +131,17 @@ public final class SpeechManager: NSObject {
                 }
             }
 
-            // If the recognition task ended (due to pause isFinal or temporary error)
-            // but the user is STILL recording, seamlessly spin up a new task without stopping audio
+            // If user stopped recording and Apple emitted the final transcription, complete cleanly
+            if self.stopCompletion != nil && (result?.isFinal == true || error != nil) {
+                self.finishStopRecording()
+                return
+            }
+
+            // If task finalized during recording (e.g. Pause timeout), restart seamlessly
             if self.isRecording && (result?.isFinal == true || error != nil) {
-                if !self.currentUtteranceText.isEmpty {
-                    self.commitCurrentUtterance()
+                if !self.currentTaskText.isEmpty {
+                    self.commitSegment(self.currentTaskText)
+                    self.currentTaskText = ""
                 }
 
                 let delay = (error != nil) ? 0.1 : 0.0
@@ -234,18 +238,34 @@ public final class SpeechManager: NSObject {
         }
 
         isRecording = false
+        stopCompletion = completion
+
+        // Stop microphone input so no more audio is added
         audioEngine.stop()
         audioEngine.inputNode.removeTap(onBus: 0)
+
+        // Tell recognizer that audio input ended so it can process final audio frames
         recognitionRequest?.endAudio()
 
-        // Wait briefly for final recognition results to flush
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in
-            guard let self = self else {
-                completion("")
-                return
-            }
-            let finalText = self.currentFullTranscript()
-            self.cleanupRecording()
+        // Watchdog fallback: if Apple takes longer than 750ms to emit isFinal, complete cleanly
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.75) { [weak self] in
+            guard let self = self, self.stopCompletion != nil else { return }
+            self.finishStopRecording()
+        }
+    }
+
+    private func finishStopRecording() {
+        guard let completion = stopCompletion else { return }
+        stopCompletion = nil
+
+        if !currentTaskText.isEmpty {
+            commitSegment(currentTaskText)
+            currentTaskText = ""
+        }
+
+        let finalText = currentFullTranscript()
+        cleanupRecording()
+        DispatchQueue.main.async {
             completion(finalText)
         }
     }

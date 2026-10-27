@@ -32,6 +32,9 @@ public final class TextPolisher {
         // 4. Remove conversational filler words and stammers
         result = removeFillerWords(result)
 
+        // 4b. Remove duplicate repeated sentences
+        result = deduplicateSentences(result)
+
         // 5. Format numbers, percentages, and currencies
         result = formatNumbersAndCurrencies(result)
 
@@ -150,6 +153,20 @@ public final class TextPolisher {
             )
         }
 
+        return processed
+    }
+
+    private func deduplicateSentences(_ text: String) -> String {
+        let pattern = "([A-Z0-9][^.!?]*[.!?](?:\\s+[A-Z0-9][^.!?]*[.!?])?)\\s+\\1"
+        var processed = text
+        if let regex = try? NSRegularExpression(pattern: pattern) {
+            processed = regex.stringByReplacingMatches(
+                in: processed,
+                options: [],
+                range: NSRange(location: 0, length: processed.utf16.count),
+                withTemplate: "$1"
+            )
+        }
         return processed
     }
 
