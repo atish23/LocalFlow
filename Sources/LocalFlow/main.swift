@@ -163,18 +163,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             OllamaClient.shared.refineTranscript(formatted) { [weak self] polished in
                 guard let self = self else { return }
 
+                // Post-cleanup: ensure no duplicate loops or stutter phrases survive the LLM
+                let finalPolished = TextPolisher.shared.deduplicateSentences(polished)
+
                 // Save to SQLite history store
                 self.correctionStore.saveHistory(
                     rawTranscript: trimmed,
-                    polishedText: polished,
+                    polishedText: finalPolished,
                     appName: appName
                 )
 
                 if !self.configManager.config.headless {
-                    self.pill.updateState(.done, partialText: polished)
+                    self.pill.updateState(.done, partialText: finalPolished)
                 }
 
-                TextPaster.shared.paste(text: polished, targetApp: self.targetApp) {
+                TextPaster.shared.paste(text: finalPolished, targetApp: self.targetApp) {
                     if !self.configManager.config.headless {
                         self.pill.hidePill(delay: 0.6)
                     }

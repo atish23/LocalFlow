@@ -40,9 +40,30 @@ public final class SpeechManager: NSObject {
         var segments = committedSegments
         let current = currentTaskText.trimmingCharacters(in: .whitespacesAndNewlines)
         if !current.isEmpty {
-            if let last = segments.last, current.hasPrefix(last) {
-                segments[segments.count - 1] = current
-            } else if segments.last != current {
+            if let last = segments.last {
+                if current.hasPrefix(last) {
+                    segments[segments.count - 1] = current
+                } else if last == current || last.hasPrefix(current) {
+                    // Already represented in last segment
+                } else {
+                    let lastWords = last.components(separatedBy: .whitespaces).filter { !$0.isEmpty }
+                    let currentWords = current.components(separatedBy: .whitespaces).filter { !$0.isEmpty }
+                    var commonPrefixCount = 0
+                    for (w1, w2) in zip(lastWords, currentWords) {
+                        if w1.lowercased() == w2.lowercased() {
+                            commonPrefixCount += 1
+                        } else {
+                            break
+                        }
+                    }
+
+                    if commonPrefixCount >= 3 && commonPrefixCount >= min(lastWords.count, currentWords.count) / 2 {
+                        segments[segments.count - 1] = current
+                    } else {
+                        segments.append(current)
+                    }
+                }
+            } else {
                 segments.append(current)
             }
         }
@@ -52,11 +73,37 @@ public final class SpeechManager: NSObject {
     private func commitSegment(_ text: String) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
-        if let last = committedSegments.last, trimmed.hasPrefix(last) {
-            committedSegments[committedSegments.count - 1] = trimmed
-        } else if committedSegments.last != trimmed {
-            committedSegments.append(trimmed)
+
+        if let last = committedSegments.last {
+            // Case 1: Exact duplicate or direct extension/prefix
+            if trimmed.hasPrefix(last) {
+                committedSegments[committedSegments.count - 1] = trimmed
+                return
+            }
+            if last == trimmed || last.hasPrefix(trimmed) {
+                return
+            }
+
+            // Case 2: Near-duplicate acoustic revision (sentences sharing >=50% common prefix words)
+            let lastWords = last.components(separatedBy: .whitespaces).filter { !$0.isEmpty }
+            let newWords = trimmed.components(separatedBy: .whitespaces).filter { !$0.isEmpty }
+            var commonPrefixCount = 0
+            for (w1, w2) in zip(lastWords, newWords) {
+                if w1.lowercased() == w2.lowercased() {
+                    commonPrefixCount += 1
+                } else {
+                    break
+                }
+            }
+
+            if commonPrefixCount >= 3 && commonPrefixCount >= min(lastWords.count, newWords.count) / 2 {
+                // This is a refined acoustic revision of the same sentence: replace, never duplicate
+                committedSegments[committedSegments.count - 1] = trimmed
+                return
+            }
         }
+
+        committedSegments.append(trimmed)
     }
 
     public func startRecording(completion: @escaping (Result<Void, Error>) -> Void) {
@@ -106,18 +153,6 @@ public final class SpeechManager: NSObject {
 
             if let result = result {
                 let text = result.bestTranscription.formattedString.trimmingCharacters(in: .whitespacesAndNewlines)
-                let now = Date().timeIntervalSince1970
-
-                // Check if Apple's recognizer reset its formattedString after a silence pause
-                let isDisjoint = !self.currentTaskText.isEmpty &&
-                                 !text.lowercased().hasPrefix(self.currentTaskText.lowercased()) &&
-                                 !self.currentTaskText.lowercased().hasPrefix(text.lowercased())
-
-                // Disjoint text after silence (>=0.5s) means previous sentence finished
-                if isDisjoint && (now - self.lastVoiceDetectedTime > 0.5 || text.count < max(1, self.currentTaskText.count / 2)) {
-                    self.commitSegment(self.currentTaskText)
-                }
-
                 self.currentTaskText = text
 
                 if result.isFinal {
@@ -137,7 +172,7 @@ public final class SpeechManager: NSObject {
                 return
             }
 
-            // If task finalized during recording (e.g. Pause timeout), restart seamlessly
+            // If task finalized during recording (speech pause or transient error), restart seamlessly
             if self.isRecording && (result?.isFinal == true || error != nil) {
                 if !self.currentTaskText.isEmpty {
                     self.commitSegment(self.currentTaskText)
@@ -158,21 +193,10 @@ public final class SpeechManager: NSObject {
 
         recognitionTask?.cancel()
         recognitionTask = nil
-        recognitionRequest = nil
-
-        let inputNode = audioEngine.inputNode
-        inputNode.removeTap(onBus: 0)
 
         let newRequest = SFSpeechAudioBufferRecognitionRequest()
         configureRecognitionRequest(newRequest)
         self.recognitionRequest = newRequest
-
-        let recordingFormat = inputNode.outputFormat(forBus: 0)
-        inputNode.installTap(onBus: 0, bufferSize: 1024, format: recordingFormat) { [weak self] buffer, _ in
-            guard let self = self else { return }
-            self.recognitionRequest?.append(buffer)
-            self.dispatchAudioLevelIfNeeded(from: buffer)
-        }
 
         setupRecognitionTask()
     }

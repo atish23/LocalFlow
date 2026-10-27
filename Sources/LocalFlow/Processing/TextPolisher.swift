@@ -132,41 +132,64 @@ public final class TextPolisher {
         }
 
         // Remove immediate duplicate repeated words (e.g., "I I think" -> "I think", "the the" -> "the")
-        let stammerPattern = "\\b([a-zA-Z]+)\\s+\\1\\b"
+        let stammerPattern = "\\b([a-zA-Z0-9]+)\\s+\\1\\b"
         if let regex = try? NSRegularExpression(pattern: stammerPattern, options: .caseInsensitive) {
-            processed = regex.stringByReplacingMatches(
-                in: processed,
-                options: [],
-                range: NSRange(location: 0, length: processed.utf16.count),
-                withTemplate: "$1"
-            )
+            for _ in 0..<3 {
+                processed = regex.stringByReplacingMatches(
+                    in: processed,
+                    options: [],
+                    range: NSRange(location: 0, length: processed.utf16.count),
+                    withTemplate: "$1"
+                )
+            }
         }
 
-        // Remove repeated phrases (e.g., "Atish Maske Atish Maske" -> "Atish Maske")
-        let phrasePattern = "\\b([a-zA-Z]+(?:\\s+[a-zA-Z]+){1,3})\\s+\\1\\b"
-        if let regex = try? NSRegularExpression(pattern: phrasePattern, options: .caseInsensitive) {
-            processed = regex.stringByReplacingMatches(
-                in: processed,
-                options: [],
-                range: NSRange(location: 0, length: processed.utf16.count),
-                withTemplate: "$1"
-            )
+        // Remove repeated phrases or clauses (e.g., "Atish Maske Atish Maske" -> "Atish Maske",
+        // or "push to get up commit one EC0550 push to get up commit one EC0550")
+        let clausePattern = "\\b([a-zA-Z0-9]+(?:\\s+[a-zA-Z0-9]+){1,25})\\s+\\1\\b"
+        if let regex = try? NSRegularExpression(pattern: clausePattern, options: .caseInsensitive) {
+            for _ in 0..<3 {
+                processed = regex.stringByReplacingMatches(
+                    in: processed,
+                    options: [],
+                    range: NSRange(location: 0, length: processed.utf16.count),
+                    withTemplate: "$1"
+                )
+            }
         }
 
         return processed
     }
 
-    private func deduplicateSentences(_ text: String) -> String {
-        let pattern = "([A-Z0-9][^.!?]*[.!?](?:\\s+[A-Z0-9][^.!?]*[.!?])?)\\s+\\1"
+    public func deduplicateSentences(_ text: String) -> String {
         var processed = text
-        if let regex = try? NSRegularExpression(pattern: pattern) {
-            processed = regex.stringByReplacingMatches(
-                in: processed,
-                options: [],
-                range: NSRange(location: 0, length: processed.utf16.count),
-                withTemplate: "$1"
-            )
+
+        // Deduplicate repeated sentences with punctuation
+        let sentencePattern = "([A-Z0-9][^.!?]*[.!?](?:\\s+[A-Z0-9][^.!?]*[.!?])*?)\\s+\\1"
+        if let regex = try? NSRegularExpression(pattern: sentencePattern, options: .caseInsensitive) {
+            for _ in 0..<3 {
+                processed = regex.stringByReplacingMatches(
+                    in: processed,
+                    options: [],
+                    range: NSRange(location: 0, length: processed.utf16.count),
+                    withTemplate: "$1"
+                )
+            }
         }
+
+        // Also clean any unpunctuated repeated phrases that might remain
+        let clausePattern = "\\b([a-zA-Z0-9]+(?:\\s+[a-zA-Z0-9]+){1,25})\\s+\\1\\b"
+        if let regex = try? NSRegularExpression(pattern: clausePattern, options: .caseInsensitive) {
+            for _ in 0..<3 {
+                processed = regex.stringByReplacingMatches(
+                    in: processed,
+                    options: [],
+                    range: NSRange(location: 0, length: processed.utf16.count),
+                    withTemplate: "$1"
+                )
+            }
+        }
+
         return processed
     }
 

@@ -42,6 +42,9 @@ public final class OllamaClient {
             ["role": "user", "content": "Transcript: <raw>\(trimmed)</raw>"]
         ]
 
+        let wordCount = trimmed.components(separatedBy: .whitespaces).count
+        let predictTokens = max(256, wordCount * 3)
+
         let requestBody: [String: Any] = [
             "model": model,
             "messages": messages,
@@ -49,7 +52,7 @@ public final class OllamaClient {
             "keep_alive": "24h",
             "options": [
                 "temperature": 0.0,
-                "num_predict": 120
+                "num_predict": predictTokens
             ]
         ]
 
