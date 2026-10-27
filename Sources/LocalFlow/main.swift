@@ -149,6 +149,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 formatted = formatted.replacingOccurrences(of: spokenTag, with: tagReplacement, options: .caseInsensitive)
             }
 
+            // Format spoken line breaks and paragraphs (e.g. "next line", "new line")
+            formatted = AppDelegate.formatSpokenCommands(formatted)
+
             // Save to SQLite history store
             self.correctionStore.saveHistory(
                 rawTranscript: trimmed,
@@ -188,6 +191,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         } else {
             print("Accessibility permission is active.")
         }
+    }
+
+    public static func formatSpokenCommands(_ text: String) -> String {
+        var result = text
+
+        // 1. Spoken new paragraphs -> double newline
+        let paragraphRegexes = ["\\b(?:new|next) paragraph\\b"]
+        for pattern in paragraphRegexes {
+            if let regex = try? NSRegularExpression(pattern: pattern, options: .caseInsensitive) {
+                result = regex.stringByReplacingMatches(in: result, options: [], range: NSRange(location: 0, length: result.utf16.count), withTemplate: "\n\n")
+            }
+        }
+
+        // 2. Spoken new lines -> single newline
+        let newlineRegexes = ["\\b(?:new|next) line\\b"]
+        for pattern in newlineRegexes {
+            if let regex = try? NSRegularExpression(pattern: pattern, options: .caseInsensitive) {
+                result = regex.stringByReplacingMatches(in: result, options: [], range: NSRange(location: 0, length: result.utf16.count), withTemplate: "\n")
+            }
+        }
+
+        // 3. Clean up spaces around newlines and capitalize after newline
+        let lines = result.components(separatedBy: "\n")
+        let formattedLines = lines.map { line -> String in
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            guard let first = trimmed.first else { return "" }
+            return String(first).uppercased() + String(trimmed.dropFirst())
+        }
+        return formattedLines.joined(separator: "\n")
     }
 
     @objc private func quitApp() {

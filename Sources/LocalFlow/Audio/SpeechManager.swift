@@ -10,7 +10,9 @@ public final class SpeechManager: NSObject {
     
     public var onPartialTranscript: ((String) -> Void)?
     public private(set) var isRecording = false
-    private var lastRecordedText = ""
+    
+    private var committedText = ""
+    private var currentUtteranceText = ""
 
     public override init() {
         super.init()
@@ -30,15 +32,20 @@ public final class SpeechManager: NSObject {
         }
     }
 
+    public func currentFullTranscript() -> String {
+        let committed = committedText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let current = currentUtteranceText.trimmingCharacters(in: .whitespacesAndNewlines)
+        if committed.isEmpty { return current }
+        if current.isEmpty { return committed }
+        return "\(committed) \(current)"
+    }
+
     public func startRecording(completion: @escaping (Result<Void, Error>) -> Void) {
         guard !isRecording else { return }
         
-        if recognitionTask != nil {
-            recognitionTask?.cancel()
-            recognitionTask = nil
-        }
-        
-        lastRecordedText = ""
+        cleanupRecording()
+        committedText = ""
+        currentUtteranceText = ""
 
         recognitionRequest = SFSpeechAudioBufferRecognitionRequest()
         guard let recognitionRequest = recognitionRequest else {
@@ -47,7 +54,6 @@ public final class SpeechManager: NSObject {
         }
 
         recognitionRequest.shouldReportPartialResults = true
-        // Enforce 100% on-device speech recognition
         if speechRecognizer?.supportsOnDeviceRecognition == true {
             recognitionRequest.requiresOnDeviceRecognition = true
         }
@@ -68,38 +74,107 @@ public final class SpeechManager: NSObject {
             return
         }
 
+        setupRecognitionTask()
+        completion(.success(()))
+    }
+
+    private func setupRecognitionTask() {
+        guard let recognitionRequest = recognitionRequest else { return }
+
         recognitionTask = speechRecognizer?.recognitionTask(with: recognitionRequest) { [weak self] result, error in
             guard let self = self else { return }
+
             if let result = result {
-                let text = result.bestTranscription.formattedString
-                self.lastRecordedText = text
+                let text = result.bestTranscription.formattedString.trimmingCharacters(in: .whitespacesAndNewlines)
+
+                // Detect if SFSpeechRecognizer reset its formattedString (new utterance started after pause)
+                if !self.currentUtteranceText.isEmpty &&
+                   !text.hasPrefix(self.currentUtteranceText.prefix(min(10, self.currentUtteranceText.count))) &&
+                   !self.currentUtteranceText.hasPrefix(text.prefix(min(10, text.count))) {
+                    // Previous utterance completed, commit it
+                    if self.committedText.isEmpty {
+                        self.committedText = self.currentUtteranceText
+                    } else {
+                        self.committedText += " " + self.currentUtteranceText
+                    }
+                    self.currentUtteranceText = text
+                } else {
+                    self.currentUtteranceText = text
+                }
+
+                let full = self.currentFullTranscript()
                 DispatchQueue.main.async {
-                    self.onPartialTranscript?(text)
+                    self.onPartialTranscript?(full)
+                }
+
+                if result.isFinal {
+                    if !self.currentUtteranceText.isEmpty {
+                        if self.committedText.isEmpty {
+                            self.committedText = self.currentUtteranceText
+                        } else {
+                            self.committedText += " " + self.currentUtteranceText
+                        }
+                        self.currentUtteranceText = ""
+                    }
                 }
             }
-            if error != nil || (result?.isFinal ?? false) {
-                self.cleanupRecording()
+
+            // If the recognition task ended (due to pause isFinal or temporary error)
+            // but the user is STILL recording, seamlessly spin up a new task without stopping audio
+            if self.isRecording && (result?.isFinal == true || error != nil) {
+                let delay = (error != nil) ? 0.1 : 0.0
+                DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+                    guard let self = self, self.isRecording else { return }
+                    self.restartRecognitionTask()
+                }
             }
         }
+    }
 
-        completion(.success(()))
+    private func restartRecognitionTask() {
+        guard isRecording else { return }
+
+        recognitionTask?.cancel()
+        recognitionTask = nil
+        recognitionRequest = nil
+
+        let inputNode = audioEngine.inputNode
+        inputNode.removeTap(onBus: 0)
+
+        let newRequest = SFSpeechAudioBufferRecognitionRequest()
+        newRequest.shouldReportPartialResults = true
+        if speechRecognizer?.supportsOnDeviceRecognition == true {
+            newRequest.requiresOnDeviceRecognition = true
+        }
+        self.recognitionRequest = newRequest
+
+        let recordingFormat = inputNode.outputFormat(forBus: 0)
+        inputNode.installTap(onBus: 0, bufferSize: 1024, format: recordingFormat) { [weak self] buffer, _ in
+            self?.recognitionRequest?.append(buffer)
+        }
+
+        setupRecognitionTask()
     }
 
     public func stopRecording(completion: @escaping (String) -> Void) {
         guard isRecording else {
-            completion(lastRecordedText)
+            completion(currentFullTranscript())
             return
         }
-        
+
+        isRecording = false
         audioEngine.stop()
         audioEngine.inputNode.removeTap(onBus: 0)
         recognitionRequest?.endAudio()
-        isRecording = false
-        
+
         // Wait briefly for final recognition results to flush
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in
-            let finalText = self?.lastRecordedText ?? ""
-            self?.cleanupRecording()
+            guard let self = self else {
+                completion("")
+                return
+            }
+            let finalText = self.currentFullTranscript()
+            self.cleanupRecording()
             completion(finalText)
         }
     }
@@ -109,6 +184,7 @@ public final class SpeechManager: NSObject {
             audioEngine.stop()
             audioEngine.inputNode.removeTap(onBus: 0)
         }
+        recognitionTask?.cancel()
         recognitionRequest = nil
         recognitionTask = nil
         isRecording = false
