@@ -1,0 +1,1 @@
+Built LocalFlow: an open-source, 100% offline macOS voice dictation app powered by Apple Neural Engine and local Ollama. Zero subscriptions, sub-50ms latency, and your voice never leaves your machine.

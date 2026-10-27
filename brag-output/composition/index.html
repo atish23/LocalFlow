@@ -1,0 +1,437 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=1920, height=1080" />
+    <title>LocalFlow Launch</title>
+    <script src="https://cdn.jsdelivr.net/npm/gsap@3.14.2/dist/gsap.min.js"></script>
+    <style>
+      :root {
+        --bg: #0B0F19;
+        --card-bg: rgba(21, 28, 45, 0.88);
+        --card-border: rgba(255, 255, 255, 0.12);
+        --text-primary: #F8FAFC;
+        --text-muted: #94A3B8;
+        --accent-blue: #3B82F6;
+        --accent-coral: #F97316;
+        --accent-green: #10B981;
+        --accent-purple: #8B5CF6;
+        --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", "Helvetica Neue", sans-serif;
+        --font-mono: "SF Mono", Menlo, Monaco, Consolas, monospace;
+      }
+
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+
+      html, body {
+        width: 1920px;
+        height: 1080px;
+        overflow: hidden;
+        background-color: var(--bg);
+        font-family: var(--font-sans);
+        color: var(--text-primary);
+        -webkit-font-smoothing: antialiased;
+      }
+
+      #root {
+        position: relative;
+        width: 100%;
+        height: 100%;
+        background: radial-gradient(circle at 50% 20%, rgba(59, 130, 246, 0.15), transparent 60%),
+                    radial-gradient(circle at 80% 80%, rgba(249, 115, 22, 0.1), transparent 50%),
+                    #0B0F19;
+        overflow: hidden;
+      }
+
+      /* Background grid */
+      .bg-grid {
+        position: absolute;
+        inset: 0;
+        background-size: 60px 60px;
+        background-image: linear-gradient(to right, rgba(255, 255, 255, 0.03) 1px, transparent 1px),
+                          linear-gradient(to bottom, rgba(255, 255, 255, 0.03) 1px, transparent 1px);
+        opacity: 0.7;
+        pointer-events: none;
+      }
+
+      .scene {
+        position: absolute;
+        inset: 0;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        padding: 80px;
+      }
+
+      /* Glass Card */
+      .glass-card {
+        background: var(--card-bg);
+        border: 1px solid var(--card-border);
+        box-shadow: 0 24px 60px rgba(0, 0, 0, 0.5);
+        backdrop-filter: blur(24px);
+        border-radius: 24px;
+      }
+
+      /* Keycap badge */
+      .keycap {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        padding: 8px 18px;
+        background: rgba(255, 255, 255, 0.12);
+        border: 1px solid rgba(255, 255, 255, 0.22);
+        border-bottom: 2px solid rgba(255, 255, 255, 0.35);
+        border-radius: 10px;
+        font-family: var(--font-mono);
+        font-size: 28px;
+        font-weight: 700;
+        color: var(--text-primary);
+        box-shadow: 0 4px 10px rgba(0,0,0,0.3);
+      }
+
+      /* Waveform bars */
+      .waveform-container {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        height: 44px;
+      }
+
+      .wave-bar {
+        width: 6px;
+        border-radius: 3px;
+        background: linear-gradient(to top, #F97316, #EF4444);
+        transform-origin: center;
+      }
+
+      /* Badges */
+      .badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 10px;
+        padding: 10px 24px;
+        border-radius: 9999px;
+        font-size: 28px;
+        font-weight: 700;
+        letter-spacing: 0.02em;
+        text-transform: uppercase;
+      }
+
+      .badge-blue {
+        background: rgba(59, 130, 246, 0.18);
+        color: #60A5FA;
+        border: 1px solid rgba(59, 130, 246, 0.4);
+      }
+
+      .badge-coral {
+        background: rgba(249, 115, 22, 0.18);
+        color: #FB923C;
+        border: 1px solid rgba(249, 115, 22, 0.4);
+      }
+
+      .badge-green {
+        background: rgba(16, 185, 129, 0.18);
+        color: #34D399;
+        border: 1px solid rgba(16, 185, 129, 0.4);
+      }
+
+      .badge-purple {
+        background: rgba(139, 92, 246, 0.18);
+        color: #C084FC;
+        border: 1px solid rgba(139, 92, 246, 0.4);
+      }
+
+      /* VU meter segments */
+      .vu-container {
+        display: flex;
+        gap: 5px;
+        align-items: center;
+        padding: 16px 24px;
+        background: rgba(0, 0, 0, 0.45);
+        border-radius: 16px;
+        border: 1px solid rgba(255, 255, 255, 0.08);
+      }
+
+      .vu-bar {
+        width: 16px;
+        height: 36px;
+        border-radius: 4px;
+        background: rgba(255, 255, 255, 0.1);
+      }
+    </style>
+  </head>
+  <body>
+    <div
+      id="root"
+      data-composition-id="main"
+      data-start="0"
+      data-duration="18"
+      data-width="1920"
+      data-height="1080"
+    >
+      <div class="bg-grid"></div>
+
+      <!-- AUDIO TRACKS -->
+      <audio id="bgm" src="assets/music/track.mp3" preload="auto" class="clip" data-start="0" data-duration="18" data-track-index="1"></audio>
+      <audio id="sfx-switch" src="assets/sfx/switch.ogg" preload="auto" class="clip" data-start="3.6" data-duration="0.5" data-track-index="2"></audio>
+      <audio id="sfx-key" src="assets/sfx/key.wav" preload="auto" class="clip" data-start="5.2" data-duration="0.3" data-track-index="3"></audio>
+      <audio id="sfx-click" src="assets/sfx/click.ogg" preload="auto" class="clip" data-start="8.2" data-duration="0.1" data-track-index="4"></audio>
+      <audio id="sfx-switch2" src="assets/sfx/switch.ogg" preload="auto" class="clip" data-start="13.7" data-duration="0.5" data-track-index="5"></audio>
+
+      <!-- SCENE 1: THE HOOK (0s - 3.7s) -->
+      <div id="scene-1" class="scene clip" data-start="0" data-duration="3.7" data-track-index="0" data-layout-allow-overlap>
+        <div id="s1-content" style="text-align: center; max-width: 1200px;">
+          <div id="s1-badge" class="badge badge-coral" style="margin-bottom: 28px;">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+            Privacy Alert
+          </div>
+          <h1 id="s1-title" style="font-size: 74px; font-weight: 700; line-height: 1.15; letter-spacing: -0.03em; margin-bottom: 24px;">
+            Why is your voice dictation<br />
+            <span style="color: #F87171; text-decoration: line-through decoration-thickness-2;">streaming audio to the cloud</span>?
+          </h1>
+          <p id="s1-subtitle" style="font-size: 32px; color: var(--text-muted); font-weight: 400; max-width: 900px; margin: 0 auto;">
+            Zero subscriptions. Zero confidential audio leaving your computer.
+          </p>
+        </div>
+      </div>
+
+      <!-- SCENE 2: THE REVEAL - FLOATING PILL HUD (3.7s - 8.0s) -->
+      <div id="scene-2" class="scene clip" data-start="3.7" data-duration="4.3" data-track-index="0" data-layout-allow-overlap>
+        <div id="s2-header" style="text-align: center; margin-bottom: 50px;">
+          <div class="badge badge-blue" style="margin-bottom: 16px;">Introducing LocalFlow</div>
+          <h2 style="font-size: 64px; font-weight: 700; letter-spacing: -0.02em;">
+            100% On-Device Voice Dictation
+          </h2>
+        </div>
+
+        <!-- Floating Glass Pill HUD Mockup -->
+        <div id="s2-pill" class="glass-card" style="padding: 20px 36px; display: flex; align-items: center; gap: 28px; min-width: 760px;">
+          <!-- 4 animated waveform bars -->
+          <div class="waveform-container">
+            <div id="wb1" class="wave-bar" style="height: 18px;"></div>
+            <div id="wb2" class="wave-bar" style="height: 36px;"></div>
+            <div id="wb3" class="wave-bar" style="height: 28px;"></div>
+            <div id="wb4" class="wave-bar" style="height: 16px;"></div>
+          </div>
+
+          <!-- Hotkey indicator -->
+          <div style="display: flex; align-items: center; gap: 12px;">
+            <span class="keycap">⌃ Control</span>
+            <span style="font-size: 28px; color: var(--text-muted); font-weight: 500;">Hold to Speak</span>
+          </div>
+
+          <div style="width: 2px; height: 36px; background: rgba(255,255,255,0.18);"></div>
+
+          <!-- Live transcript stream -->
+          <div id="s2-transcript" style="font-size: 30px; font-weight: 600; color: #F8FAFC; white-space: nowrap;">
+            "Push to talk, instant transcription..."
+          </div>
+
+          <!-- Success badge -->
+          <div id="s2-status" class="badge badge-green" style="margin-left: auto; display: none;">
+            ✓ Pasted
+          </div>
+        </div>
+
+        <p id="s2-caption" style="margin-top: 40px; font-size: 28px; color: var(--text-muted);">
+          Driven by Apple Neural Engine with sub-50ms latency.
+        </p>
+      </div>
+
+      <!-- SCENE 3: THE ENGINE - ANE + OLLAMA (8.0s - 13.6s) -->
+      <div id="scene-3" class="scene clip" data-start="8.0" data-duration="5.6" data-track-index="0" data-layout-allow-overlap>
+        <div style="text-align: center; margin-bottom: 40px;">
+          <div class="badge badge-purple" style="margin-bottom: 14px;">Dual Engine Architecture</div>
+          <h2 style="font-size: 60px; font-weight: 700; letter-spacing: -0.02em;">
+            Acoustic STT Meets Local Intelligence
+          </h2>
+        </div>
+
+        <div style="display: flex; gap: 36px; max-width: 1400px; width: 100%;">
+          <!-- Card 1: Apple Neural Engine -->
+          <div id="s3-card1" class="glass-card" style="flex: 1; padding: 44px;">
+            <div style="display: flex; align-items: center; gap: 18px; margin-bottom: 26px;">
+              <div style="width: 56px; height: 56px; border-radius: 14px; background: rgba(59, 130, 246, 0.22); display: flex; align-items: center; justify-content: center; font-size: 30px;">
+                ⚡️
+              </div>
+              <div>
+                <h3 style="font-size: 34px; font-weight: 700;">Apple Neural Engine</h3>
+                <p style="font-size: 28px; color: var(--text-muted);">SFSpeechRecognizer On-Device</p>
+              </div>
+            </div>
+            <ul style="list-style: none; display: flex; flex-direction: column; gap: 16px; font-size: 28px; color: var(--text-primary);">
+              <li style="display: flex; align-items: center; gap: 12px;">
+                <span style="color: #10B981; font-weight: 700;">✓</span> 100% offline speech recognition
+              </li>
+              <li style="display: flex; align-items: center; gap: 12px;">
+                <span style="color: #10B981; font-weight: 700;">✓</span> Dynamic vocabulary & domain terms
+              </li>
+              <li style="display: flex; align-items: center; gap: 12px;">
+                <span style="color: #10B981; font-weight: 700;">✓</span> Zero audio sent to external servers
+              </li>
+            </ul>
+          </div>
+
+          <!-- Card 2: Local Ollama LLM -->
+          <div id="s3-card2" class="glass-card" style="flex: 1; padding: 44px;">
+            <div style="display: flex; align-items: center; gap: 18px; margin-bottom: 26px;">
+              <div style="width: 56px; height: 56px; border-radius: 14px; background: rgba(249, 115, 22, 0.22); display: flex; align-items: center; justify-content: center; font-size: 30px;">
+                🧠
+              </div>
+              <div>
+                <h3 style="font-size: 34px; font-weight: 700;">Local Ollama LLM</h3>
+                <p style="font-size: 28px; color: var(--text-muted);">Qwen 2.5 Coder & Llama 3.2</p>
+              </div>
+            </div>
+            <ul style="list-style: none; display: flex; flex-direction: column; gap: 16px; font-size: 28px; color: var(--text-primary);">
+              <li style="display: flex; align-items: center; gap: 12px;">
+                <span style="color: #10B981; font-weight: 700;">✓</span> Sub-500ms grammar & formatting
+              </li>
+              <li style="display: flex; align-items: center; gap: 12px;">
+                <span style="color: #10B981; font-weight: 700;">✓</span> Multi-clause loop deduplication
+              </li>
+              <li style="display: flex; align-items: center; gap: 12px;">
+                <span style="color: #10B981; font-weight: 700;">✓</span> App-aware tone (Code, Email, Chat)
+              </li>
+            </ul>
+          </div>
+        </div>
+
+        <!-- 32-Segment VU Meter Mockup -->
+        <div id="s3-vu" class="vu-container" style="margin-top: 36px;">
+          <div class="vu-bar vuseg"></div><div class="vu-bar vuseg"></div>
+          <div class="vu-bar vuseg"></div><div class="vu-bar vuseg"></div>
+          <div class="vu-bar vuseg"></div><div class="vu-bar vuseg"></div>
+          <div class="vu-bar vuseg"></div><div class="vu-bar vuseg"></div>
+          <div class="vu-bar vuseg"></div><div class="vu-bar vuseg"></div>
+          <div class="vu-bar vuseg"></div><div class="vu-bar vuseg"></div>
+          <div class="vu-bar vuseg"></div><div class="vu-bar vuseg"></div>
+          <div class="vu-bar vuseg"></div><div class="vu-bar vuseg"></div>
+          <div class="vu-bar vuseg"></div><div class="vu-bar vuseg"></div>
+          <div class="vu-bar vuseg"></div><div class="vu-bar vuseg"></div>
+          <div class="vu-bar vuseg"></div><div class="vu-bar vuseg"></div>
+          <div class="vu-bar vuseg"></div><div class="vu-bar vuseg"></div>
+          <div class="vu-bar vuseg"></div><div class="vu-bar vuseg"></div>
+          <div class="vu-bar vuseg"></div><div class="vu-bar vuseg"></div>
+          <div class="vu-bar vuseg"></div><div class="vu-bar vuseg"></div>
+          <div class="vu-bar vuseg"></div><div class="vu-bar vuseg"></div>
+        </div>
+      </div>
+
+      <!-- SCENE 4: OUTRO & PUNCHLINE (13.6s - 18.0s) -->
+      <div id="scene-4" class="scene clip" data-start="13.6" data-duration="4.4" data-track-index="0" data-layout-allow-overlap>
+        <div id="s4-content" style="text-align: center; max-width: 1100px;">
+          <!-- App icon mockup -->
+          <div id="s4-icon" style="width: 108px; height: 108px; border-radius: 28px; background: linear-gradient(135deg, #3B82F6, #1D4ED8); margin: 0 auto 24px; display: flex; align-items: center; justify-content: center; box-shadow: 0 16px 40px rgba(59, 130, 246, 0.4); font-size: 54px;">
+            🎙️
+          </div>
+          <h1 id="s4-title" style="font-size: 82px; font-weight: 800; letter-spacing: -0.03em; margin-bottom: 16px;">
+            LocalFlow
+          </h1>
+          <p id="s4-subtitle" style="font-size: 34px; font-weight: 600; color: #60A5FA; margin-bottom: 32px;">
+            Zero subscriptions. Zero cloud lag. 100% Private.
+          </p>
+
+          <div id="s4-badges" style="display: flex; justify-content: center; gap: 18px; margin-bottom: 40px;">
+            <div class="badge badge-blue">Apple Silicon Native</div>
+            <div class="badge badge-green">MIT Open Source</div>
+            <div class="badge badge-coral">Offline Whisper & ANE</div>
+          </div>
+
+          <div id="s4-cta" style="font-family: var(--font-mono); font-size: 28px; color: var(--text-primary); padding: 16px 36px; background: rgba(255, 255, 255, 0.08); border: 1px solid rgba(255, 255, 255, 0.18); border-radius: 14px; display: inline-block;">
+            github.com/atish23/LocalFlow
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- GSAP ANIMATION LOGIC -->
+    <script>
+      const tl = gsap.timeline({ paused: true });
+
+      // Audio volumes
+      const bgm = document.getElementById("bgm");
+      if (bgm) {
+        bgm.volume = 0.55;
+      }
+
+      // SCENE 1 ANIMATIONS (0.0s to 3.7s)
+      // Frame 0 has visible content for strong social poster preview
+      tl.set("#s1-badge", { opacity: 1, y: 0, scale: 1 }, 0);
+      tl.set("#s1-title", { opacity: 1, y: 0 }, 0);
+      tl.set("#s1-subtitle", { opacity: 1, y: 0 }, 0);
+
+      // Subtle breath on Scene 1
+      tl.to("#s1-content", { scale: 1.02, duration: 3.0, ease: "none" }, 0);
+      tl.to("#s1-content", { opacity: 0, scale: 0.96, y: -20, duration: 0.35, ease: "power2.in" }, 3.35);
+
+      // SCENE 2 ANIMATIONS (3.7s to 8.0s)
+      tl.fromTo("#s2-header", { opacity: 0, y: 20 }, { opacity: 1, y: 0, duration: 0.4, ease: "power2.out" }, 3.7);
+      tl.fromTo("#s2-pill", { opacity: 0, scale: 0.85, y: 40 }, { opacity: 1, scale: 1, y: 0, duration: 0.5, ease: "back.out(1.5)" }, 3.75);
+
+      // Waveform animation
+      const bars = ["#wb1", "#wb2", "#wb3", "#wb4"];
+      const heights = [
+        [32, 16, 36, 20],
+        [18, 40, 20, 30],
+        [36, 24, 42, 16],
+        [22, 34, 28, 38],
+        [40, 20, 34, 26],
+        [20, 38, 18, 32]
+      ];
+      heights.forEach((hSet, idx) => {
+        const time = 4.0 + idx * 0.4;
+        bars.forEach((bId, bIdx) => {
+          tl.to(bId, { height: hSet[bIdx], duration: 0.3, ease: "power1.inOut" }, time);
+        });
+      });
+
+      tl.fromTo("#s2-transcript", { opacity: 0.2 }, { opacity: 1, duration: 0.4 }, 4.1);
+      tl.fromTo("#s2-caption", { opacity: 0, y: 15 }, { opacity: 1, y: 0, duration: 0.4 }, 4.3);
+
+      // Success State on Pill (release to paste)
+      tl.to(".waveform-container", { opacity: 0.3, duration: 0.2 }, 6.5);
+      tl.to("#s2-pill", { borderColor: "rgba(16, 185, 129, 0.4)", boxShadow: "0 24px 60px rgba(16, 185, 129, 0.25)", duration: 0.3 }, 6.5);
+      tl.set("#s2-status", { display: "inline-flex" }, 6.6);
+      tl.fromTo("#s2-status", { opacity: 0, scale: 0.8 }, { opacity: 1, scale: 1, duration: 0.25, ease: "back.out(2.0)" }, 6.6);
+      tl.to(["#s2-header", "#s2-pill", "#s2-caption"], { opacity: 0, y: -20, duration: 0.35, ease: "power2.in" }, 7.65);
+
+      // SCENE 3 ANIMATIONS (8.0s to 13.6s)
+      tl.fromTo("#s3-card1", { opacity: 0, x: -60, scale: 0.95 }, { opacity: 1, x: 0, scale: 1, duration: 0.5, ease: "power3.out" }, 8.05);
+      tl.fromTo("#s3-card2", { opacity: 0, x: 60, scale: 0.95 }, { opacity: 1, x: 0, scale: 1, duration: 0.5, ease: "power3.out" }, 8.2);
+      tl.fromTo("#s3-vu", { opacity: 0, y: 20 }, { opacity: 1, y: 0, duration: 0.4 }, 8.4);
+
+      // Dynamic VU Meter segments lighting up and pulsing
+      const vubars = document.querySelectorAll(".vuseg");
+      vubars.forEach((bar, i) => {
+        const isGreen = i < 18;
+        const isYellow = i >= 18 && i < 26;
+        const color = isGreen ? "#10B981" : (isYellow ? "#FBBF24" : "#EF4444");
+        tl.to(bar, { backgroundColor: color, duration: 0.05, ease: "none" }, 8.6 + i * 0.04);
+      });
+
+      // Keep motion alive across 10s-13s to prevent dead stretch
+      tl.to("#s3-card1", { y: -6, duration: 1.2, ease: "sine.inOut", yoyo: true, repeat: 1 }, 10.0);
+      tl.to("#s3-card2", { y: -6, duration: 1.2, ease: "sine.inOut", yoyo: true, repeat: 1 }, 10.3);
+
+      tl.to(["#s3-card1", "#s3-card2", "#s3-vu"], { opacity: 0, scale: 0.96, y: -20, duration: 0.35, ease: "power2.in" }, 13.25);
+
+      // SCENE 4 ANIMATIONS (13.6s to 18.0s)
+      tl.fromTo("#s4-icon", { opacity: 0, scale: 0.5, rotation: -15 }, { opacity: 1, scale: 1, rotation: 0, duration: 0.5, ease: "back.out(1.8)" }, 13.65);
+      tl.fromTo("#s4-title", { opacity: 0, y: 30 }, { opacity: 1, y: 0, duration: 0.4, ease: "power3.out" }, 13.85);
+      tl.fromTo("#s4-subtitle", { opacity: 0, y: 20 }, { opacity: 1, y: 0, duration: 0.4, ease: "power2.out" }, 14.1);
+      tl.fromTo("#s4-badges", { opacity: 0, scale: 0.9 }, { opacity: 1, scale: 1, duration: 0.4, ease: "back.out(1.5)" }, 14.35);
+      tl.fromTo("#s4-cta", { opacity: 0, y: 15 }, { opacity: 1, y: 0, duration: 0.4, ease: "power2.out" }, 14.65);
+
+      // Final audio fade out
+      tl.to("#bgm", { volume: 0, duration: 1.2, ease: "power1.in" }, 16.8);
+
+      window.__timelines["main"] = tl;
+      tl.seek(0);
+    </script>
+  </body>
+</html>
