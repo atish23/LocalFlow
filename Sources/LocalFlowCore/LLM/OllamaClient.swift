@@ -23,6 +23,26 @@ public final class OllamaClient {
         return Self.sanitizeURL(ConfigManager.shared.config.llm_url)
     }
 
+    public func fetchInstalledModels(completion: @escaping ([String]) -> Void) {
+        let url = baseURL.appendingPathComponent("/api/tags")
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+        request.timeoutInterval = 3.0
+
+        let task = URLSession.shared.dataTask(with: request) { data, response, error in
+            guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200,
+                  let data = data,
+                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let models = json["models"] as? [[String: Any]] else {
+                DispatchQueue.main.async { completion([]) }
+                return
+            }
+            let modelNames = models.compactMap { $0["name"] as? String }
+            DispatchQueue.main.async { completion(modelNames) }
+        }
+        task.resume()
+    }
+
     public func testConnection(completion: @escaping (Bool, String) -> Void) {
         let url = baseURL.appendingPathComponent("/api/tags")
         var request = URLRequest(url: url)

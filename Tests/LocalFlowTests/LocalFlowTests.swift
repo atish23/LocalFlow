@@ -1,4 +1,5 @@
 import XCTest
+import SwiftUI
 @testable import LocalFlowCore
 
 final class LocalFlowTests: XCTestCase {
@@ -281,4 +282,75 @@ final class LocalFlowTests: XCTestCase {
         // Verify hasPermissions evaluates without crashing
         _ = SpeechManager.hasPermissions()
     }
+
+    // MARK: - 8. UI and Settings Tests
+
+    func testSettingsTabsMetadata() {
+        for tab in SettingsTab.allCases {
+            XCTAssertFalse(tab.rawValue.isEmpty)
+            XCTAssertFalse(tab.iconName.isEmpty)
+            XCTAssertFalse(tab.subtitle.isEmpty)
+            // Ensure no em-dash or en-dash in any tab string
+            XCTAssertFalse(tab.rawValue.contains("\u{2014}"))
+            XCTAssertFalse(tab.rawValue.contains("\u{2013}"))
+            XCTAssertFalse(tab.subtitle.contains("\u{2014}"))
+            XCTAssertFalse(tab.subtitle.contains("\u{2013}"))
+        }
+    }
+
+    func testSettingsWindowManagerPresentation() {
+        let expectation = self.expectation(description: "Show settings window")
+        DispatchQueue.main.async {
+            SettingsWindowManager.shared.showSettings()
+            expectation.fulfill()
+        }
+        wait(for: [expectation], timeout: 2.0)
+    }
+
+    func testConfigToneAndTagsPersistence() {
+        var cfg = ConfigManager.shared.config
+        let originalPrompt = cfg.style_instructions
+        let originalTags = cfg.tags
+
+        cfg.style_instructions = "Custom test style instructions."
+        cfg.tags[":testtag"] = "Expansion result"
+        ConfigManager.shared.config = cfg
+        ConfigManager.shared.save()
+
+        // Reload
+        let reloaded = ConfigManager.shared.config
+        XCTAssertEqual(reloaded.style_instructions, "Custom test style instructions.")
+        XCTAssertEqual(reloaded.tags[":testtag"], "Expansion result")
+
+        // Cleanup
+        cfg.style_instructions = originalPrompt
+        cfg.tags = originalTags
+        ConfigManager.shared.config = cfg
+        ConfigManager.shared.save()
+    }
+
+    func testOllamaClientFetchModels() {
+        let expectation = self.expectation(description: "Fetch installed models")
+        OllamaClient.shared.fetchInstalledModels { models in
+            // Should return an array without crashing regardless of whether Ollama is online
+            XCTAssertNotNil(models)
+            expectation.fulfill()
+        }
+        wait(for: [expectation], timeout: 4.0)
+    }
+
+    func testSettingsWindowManagerReopenLifecycle() {
+        let expectation = self.expectation(description: "Window lifecycle reopen")
+        DispatchQueue.main.async {
+            // First open
+            SettingsWindowManager.shared.showSettings()
+            // Simulate window close
+            NotificationCenter.default.post(name: NSWindow.willCloseNotification, object: nil)
+            // Reopen after close
+            SettingsWindowManager.shared.showSettings()
+            expectation.fulfill()
+        }
+        wait(for: [expectation], timeout: 2.0)
+    }
 }
+
