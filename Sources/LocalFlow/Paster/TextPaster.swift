@@ -39,8 +39,8 @@ public final class TextPaster {
             app.activate(options: .activateIgnoringOtherApps)
         }
 
-        // 3. Pause briefly to ensure the target window is active, then simulate Cmd+V sequence
-        DispatchQueue.global(qos: .userInteractive).asyncAfter(deadline: .now() + 0.15) {
+        // 3. Pause 220ms to ensure target window (e.g. Electron/Chromium/Terminal) has active focus before Cmd+V
+        DispatchQueue.global(qos: .userInteractive).asyncAfter(deadline: .now() + 0.22) {
             self.simulateCmdV()
             DispatchQueue.main.async {
                 completion?()
@@ -49,9 +49,17 @@ public final class TextPaster {
     }
 
     private func simulateCmdV() {
-        let source = CGEventSource(stateID: .combinedSessionState)
+        let source = CGEventSource(stateID: .hidSystemState)
         let cmdKeyCode: CGKeyCode = 55 // kVK_Command
         let vKeyCode: CGKeyCode = 9    // kVK_ANSI_V
+        let ctrlKeyCode: CGKeyCode = 59 // kVK_Control
+
+        // Release any lingering Control modifier state from the hotkey tap
+        if let ctrlUp = CGEvent(keyboardEventSource: source, virtualKey: ctrlKeyCode, keyDown: false) {
+            ctrlUp.flags = []
+            ctrlUp.post(tap: .cghidEventTap)
+            usleep(15_000)
+        }
 
         guard let cmdDown = CGEvent(keyboardEventSource: source, virtualKey: cmdKeyCode, keyDown: true),
               let vDown = CGEvent(keyboardEventSource: source, virtualKey: vKeyCode, keyDown: true),
@@ -61,23 +69,23 @@ public final class TextPaster {
             return
         }
 
-        cmdDown.flags = .maskCommand
-        vDown.flags = .maskCommand
-        vUp.flags = .maskCommand
+        cmdDown.flags = [.maskCommand]
+        vDown.flags = [.maskCommand]
+        vUp.flags = [.maskCommand]
         cmdUp.flags = []
 
-        // Post exclusively to HID event tap so Cmd+V fires exactly once
+        // Post exclusively to HID event tap so Cmd+V fires cleanly
         cmdDown.post(tap: .cghidEventTap)
-        usleep(25_000)
+        usleep(30_000)
 
         vDown.post(tap: .cghidEventTap)
-        usleep(40_000)
+        usleep(45_000)
 
         vUp.post(tap: .cghidEventTap)
-        usleep(25_000)
+        usleep(30_000)
 
         cmdUp.post(tap: .cghidEventTap)
 
-        print("TextPaster: Single Cmd+V dispatched")
+        print("TextPaster: Clean Cmd+V dispatched")
     }
 }
