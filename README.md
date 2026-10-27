@@ -11,6 +11,29 @@ LocalFlow is a fast, 100% offline, native macOS voice dictation application buil
 
 ---
 
+## Launch Demo
+
+<p align="center">
+  <video src="docs/images/localflow_demo.mp4" controls="controls" muted="muted" width="100%" poster="docs/images/demo_poster.jpg"></video>
+</p>
+
+> **Video Preview**: Click above to play the 20-second launch video, or download [localflow_demo.mp4](docs/images/localflow_demo.mp4).
+
+---
+
+## User Interface & Screenshots
+
+LocalFlow features a native macOS configuration window with modern sidebar navigation, live device monitors, and one-click model selectors:
+
+<p align="center">
+  <img src="docs/images/general_settings.png" width="49%" alt="LocalFlow General Settings" />
+  <img src="docs/images/ai_backend.png" width="49%" alt="LocalFlow AI Backend Settings" />
+</p>
+
+*Left: General configuration with Push-to-Talk (Hold to Talk) vs Double-Tap Toggle and customizable physical trigger modifiers. Right: AI Backend with local Ollama model discovery and one-click model switching.*
+
+---
+
 ## Key Highlights
 
 - **100% Private & On-Device**: Built on Apple Speech Framework (`SFSpeechRecognizer`) executing directly on the Apple Neural Engine (ANE). Your audio never leaves your computer.
