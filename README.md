@@ -14,23 +14,54 @@ LocalFlow is a fast, 100% offline, native macOS voice dictation application buil
 ## Launch Demo
 
 <p align="center">
-  <video src="docs/images/localflow_demo.mp4" controls="controls" muted="muted" width="100%" poster="docs/images/demo_poster.jpg"></video>
+  <img src="docs/images/localflow_demo.gif" alt="LocalFlow Launch Demo" width="100%" />
 </p>
 
-> **Video Preview**: Click above to play the 20-second launch video, or download [localflow_demo.mp4](docs/images/localflow_demo.mp4).
+<p align="center">
+  <em>LocalFlow in action: native speech recognition, live floating HUD, and local LLM formatting.</em><br />
+  <a href="docs/images/localflow_demo.mp4">Download high-definition video (1080p MP4 with sound)</a>
+</p>
 
 ---
 
 ## User Interface & Screenshots
 
-LocalFlow features a native macOS configuration window with modern sidebar navigation, live device monitors, and one-click model selectors:
+LocalFlow features a native macOS configuration window built with SwiftUI and AppKit. It includes real-time audio meters, one-click Ollama model selectors, custom vocabulary management, and dictation history analytics:
+
+### 1. General Settings
+Configure Push-to-Talk (Hold-to-Talk) versus Double-Tap Toggle modes, choose physical trigger keys, adjust double-tap timing, and toggle trackpad haptics or audio cues.
 
 <p align="center">
-  <img src="docs/images/general_settings.png" width="49%" alt="LocalFlow General Settings" />
-  <img src="docs/images/ai_backend.png" width="49%" alt="LocalFlow AI Backend Settings" />
+  <img src="docs/images/general_settings.png" width="92%" alt="LocalFlow General Settings" />
 </p>
 
-*Left: General configuration with Push-to-Talk (Hold to Talk) vs Double-Tap Toggle and customizable physical trigger modifiers. Right: AI Backend with local Ollama model discovery and one-click model switching.*
+### 2. Audio Input & Live Level Monitor
+Select active microphones, monitor live RMS audio levels in real time, and verify macOS privacy permissions (Microphone, Speech Recognition, and Accessibility).
+
+<p align="center">
+  <img src="docs/images/audio_input.png" width="92%" alt="LocalFlow Audio Input Settings" />
+</p>
+
+### 3. AI Backend (Local Ollama LLM)
+Connect to local Ollama endpoints, auto-discover installed models (such as Qwen 2.5 Coder or Llama 3.2), tune sampling temperatures, and customize personal voice styling instructions.
+
+<p align="center">
+  <img src="docs/images/ai_backend.png" width="92%" alt="LocalFlow AI Backend Settings" />
+</p>
+
+### 4. Vocabulary & Snippets
+Add domain terms, technical acronyms, and phonetic corrections. Expand shorthand tags (such as `:standup` or `:email`) and import or export dictionaries via CSV and JSON.
+
+<p align="center">
+  <img src="docs/images/vocabulary_snippets.png" width="92%" alt="LocalFlow Vocabulary and Snippets" />
+</p>
+
+### 5. History & Analytics
+Review past dictations, search by keyword or application, inspect raw versus polished transcripts, copy prior entries, and export your history to CSV.
+
+<p align="center">
+  <img src="docs/images/history_analytics.png" width="92%" alt="LocalFlow History and Analytics" />
+</p>
 
 ---
 
