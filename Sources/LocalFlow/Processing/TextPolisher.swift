@@ -178,6 +178,50 @@ public final class TextPolisher {
             )
         }
 
+        // Fiscal Years: "FY 2627", "year 2627", "three year 2627" -> "FY 26-27"
+        processed = formatFiscalYears(processed)
+
+        return processed
+    }
+
+    private func formatFiscalYears(_ text: String) -> String {
+        var processed = text
+        // Acoustic mishearings
+        let acousticFixes = [
+            ("(?i)\\bfinancial leader\\b", "financial ledger"),
+            ("(?i)\\b(?:for\\s+)?three\\s+year\\s+(\\d{4})\\b", "for FY $1"),
+            ("(?i)\\bthree\\s+year\\b", "FY")
+        ]
+        for (pattern, templ) in acousticFixes {
+            if let regex = try? NSRegularExpression(pattern: pattern) {
+                processed = regex.stringByReplacingMatches(in: processed, options: [], range: NSRange(location: 0, length: processed.utf16.count), withTemplate: templ)
+            }
+        }
+
+        // Pattern: "(year|FY|financial year)? 2627" -> "FY 26-27" when year digits are sequential
+        let fyPattern = "(?i)\\b(FY\\s*|financial\\s+year\\s*|fiscal\\s+year\\s*|year\\s*)?(\\d{2})(\\d{2})\\b"
+        if let regex = try? NSRegularExpression(pattern: fyPattern) {
+            let matches = regex.matches(in: processed, options: [], range: NSRange(location: 0, length: processed.utf16.count))
+            for match in matches.reversed() {
+                guard let r2 = Range(match.range(at: 2), in: processed),
+                      let r3 = Range(match.range(at: 3), in: processed),
+                      let y1 = Int(processed[r2]),
+                      let y2 = Int(processed[r3]) else { continue }
+
+                if y2 == (y1 + 1) % 100 {
+                    var prefix = ""
+                    if match.range(at: 1).location != NSNotFound, let r1 = Range(match.range(at: 1), in: processed) {
+                        prefix = String(processed[r1]).trimmingCharacters(in: .whitespaces)
+                    }
+                    let cleanPrefix = prefix.isEmpty ? "" : "FY "
+                    let replacement = "\(cleanPrefix)\(String(format: "%02d-%02d", y1, y2))".trimmingCharacters(in: .whitespaces)
+                    if let fullRange = Range(match.range, in: processed) {
+                        processed.replaceSubrange(fullRange, with: replacement)
+                    }
+                }
+            }
+        }
+
         return processed
     }
 
