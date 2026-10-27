@@ -257,7 +257,14 @@ public final class CorrectionStore {
             ("aadhar", "Aadhaar", "name"),
             ("devrel", "DevRel", "tech"),
             ("macos", "macOS", "tech"),
-            ("ios", "iOS", "tech")
+            ("ios", "iOS", "tech"),
+            ("llm wiki", "LLM wiki", "tech"),
+            ("llm", "LLM", "tech"),
+            ("netherland", "LLM wiki", "tech"),
+            ("netherlands", "LLM wiki", "tech"),
+            ("earliest scale", "earlier skill", "tech"),
+            ("earlier scale", "earlier skill", "tech"),
+            ("remotion", "Remotion", "tech")
         ]
 
         for (trigger, repl, cat) in defaults {

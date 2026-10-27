@@ -63,6 +63,24 @@ public final class TextPolisher {
                 )
             }
         }
+
+        // Contextual phonetic substitutions (speech recognizer acoustic confusion)
+        let contextualCorrections = [
+            ("(?i)\\b(earlier|earliest|my|agent|this|new|old|antigravity)\\s+scale\\b", "$1 skill"),
+            ("(?i)\\b(in|at|our|the)\\s+Netherland(s)?\\b", "$1 LLM wiki"),
+            ("(?i)\\bNetherland(s)?\\s+(wiki|folder|repo|directory|notes)\\b", "LLM wiki $2")
+        ]
+        for (pattern, templ) in contextualCorrections {
+            if let regex = try? NSRegularExpression(pattern: pattern) {
+                processed = regex.stringByReplacingMatches(
+                    in: processed,
+                    options: [],
+                    range: NSRange(location: 0, length: processed.utf16.count),
+                    withTemplate: templ
+                )
+            }
+        }
+
         return processed
     }
 

@@ -55,10 +55,7 @@ public final class SpeechManager: NSObject {
             return
         }
 
-        recognitionRequest.shouldReportPartialResults = true
-        if speechRecognizer?.supportsOnDeviceRecognition == true {
-            recognitionRequest.requiresOnDeviceRecognition = true
-        }
+        configureRecognitionRequest(recognitionRequest)
 
         let inputNode = audioEngine.inputNode
         let recordingFormat = inputNode.outputFormat(forBus: 0)
@@ -146,10 +143,7 @@ public final class SpeechManager: NSObject {
         inputNode.removeTap(onBus: 0)
 
         let newRequest = SFSpeechAudioBufferRecognitionRequest()
-        newRequest.shouldReportPartialResults = true
-        if speechRecognizer?.supportsOnDeviceRecognition == true {
-            newRequest.requiresOnDeviceRecognition = true
-        }
+        configureRecognitionRequest(newRequest)
         self.recognitionRequest = newRequest
 
         let recordingFormat = inputNode.outputFormat(forBus: 0)
@@ -160,6 +154,22 @@ public final class SpeechManager: NSObject {
         }
 
         setupRecognitionTask()
+    }
+
+    private func configureRecognitionRequest(_ request: SFSpeechAudioBufferRecognitionRequest) {
+        request.shouldReportPartialResults = true
+        if speechRecognizer?.supportsOnDeviceRecognition == true {
+            request.requiresOnDeviceRecognition = true
+        }
+
+        // Bias Apple Neural Engine acoustic decoder with custom vocabulary & domain terms
+        let vocab = CorrectionStore.shared.getAllVocabulary()
+        var hints = vocab.map { $0.triggerPhrase } + vocab.map { $0.replacement }
+        hints.append(contentsOf: [
+            "LLM wiki", "LLM", "wiki", "skill", "skills", "Antigravity",
+            "Wispr Flow", "LocalFlow", "Ollama", "Whisper", "Remotion", "n8n", "GitHub", "macOS"
+        ])
+        request.contextualStrings = Array(Set(hints.filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }))
     }
 
     private func dispatchAudioLevelIfNeeded(from buffer: AVAudioPCMBuffer) {
