@@ -148,27 +148,36 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let appStyle = self.configManager.config.styleForApp(bundleId: bundleId)
             print("Direct Transcript: \"\(trimmed)\" (App: \(appName), Style: \(appStyle))")
 
-            // Polish text using deterministic pipeline (vocabulary, fillers, self-corrections, numbers, lists, newlines)
+            // 1. Instant deterministic pipeline (vocabulary, fillers, self-corrections, numbers, lists, newlines)
             let formatted = TextPolisher.shared.polish(
                 text: trimmed,
                 style: appStyle,
                 tags: self.configManager.config.tags
             )
 
-            // Save to SQLite history store
-            self.correctionStore.saveHistory(
-                rawTranscript: trimmed,
-                polishedText: formatted,
-                appName: appName
-            )
-
             if !self.configManager.config.headless {
-                self.pill.updateState(.done, partialText: formatted)
+                self.pill.updateState(.processing, partialText: "Polishing with Ollama...")
             }
 
-            TextPaster.shared.paste(text: formatted, targetApp: self.targetApp) {
+            // 2. High-speed local LLM grammar and factual correction (Qwen 2.5 Coder 1.5B)
+            OllamaClient.shared.refineTranscript(formatted) { [weak self] polished in
+                guard let self = self else { return }
+
+                // Save to SQLite history store
+                self.correctionStore.saveHistory(
+                    rawTranscript: trimmed,
+                    polishedText: polished,
+                    appName: appName
+                )
+
                 if !self.configManager.config.headless {
-                    self.pill.hidePill(delay: 0.6)
+                    self.pill.updateState(.done, partialText: polished)
+                }
+
+                TextPaster.shared.paste(text: polished, targetApp: self.targetApp) {
+                    if !self.configManager.config.headless {
+                        self.pill.hidePill(delay: 0.6)
+                    }
                 }
             }
         }
