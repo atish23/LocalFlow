@@ -139,6 +139,17 @@ public final class TextPolisher {
             )
         }
 
+        // Remove repeated phrases (e.g., "Atish Maske Atish Maske" -> "Atish Maske")
+        let phrasePattern = "\\b([a-zA-Z]+(?:\\s+[a-zA-Z]+){1,3})\\s+\\1\\b"
+        if let regex = try? NSRegularExpression(pattern: phrasePattern, options: .caseInsensitive) {
+            processed = regex.stringByReplacingMatches(
+                in: processed,
+                options: [],
+                range: NSRange(location: 0, length: processed.utf16.count),
+                withTemplate: "$1"
+            )
+        }
+
         return processed
     }
 

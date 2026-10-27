@@ -88,18 +88,19 @@ public final class SpeechManager: NSObject {
             if let result = result {
                 let text = result.bestTranscription.formattedString.trimmingCharacters(in: .whitespacesAndNewlines)
 
-                // Detect if SFSpeechRecognizer reset its formattedString (new utterance started after pause)
-                if !self.currentUtteranceText.isEmpty &&
-                   !text.hasPrefix(self.currentUtteranceText.prefix(min(10, self.currentUtteranceText.count))) &&
-                   !self.currentUtteranceText.hasPrefix(text.prefix(min(10, text.count))) {
-                    // Previous utterance completed, commit it
-                    if self.committedText.isEmpty {
-                        self.committedText = self.currentUtteranceText
-                    } else {
-                        self.committedText += " " + self.currentUtteranceText
+                if result.isFinal {
+                    // Task finalized cleanly: commit this entire chunk and clear current utterance
+                    if !text.isEmpty {
+                        if self.committedText.isEmpty {
+                            self.committedText = text
+                        } else {
+                            self.committedText += " " + text
+                        }
                     }
-                    self.currentUtteranceText = text
+                    self.currentUtteranceText = ""
                 } else {
+                    // Ongoing streaming hypothesis: ALWAYS update currentUtteranceText cleanly
+                    // NEVER append partial hypotheses to committedText while in the same task!
                     self.currentUtteranceText = text
                 }
 
@@ -107,22 +108,21 @@ public final class SpeechManager: NSObject {
                 DispatchQueue.main.async {
                     self.onPartialTranscript?(full)
                 }
-
-                if result.isFinal {
-                    if !self.currentUtteranceText.isEmpty {
-                        if self.committedText.isEmpty {
-                            self.committedText = self.currentUtteranceText
-                        } else {
-                            self.committedText += " " + self.currentUtteranceText
-                        }
-                        self.currentUtteranceText = ""
-                    }
-                }
             }
 
             // If the recognition task ended (due to pause isFinal or temporary error)
             // but the user is STILL recording, seamlessly spin up a new task without stopping audio
             if self.isRecording && (result?.isFinal == true || error != nil) {
+                // If there was uncommitted current utterance on error, commit it before restart
+                if !self.currentUtteranceText.isEmpty {
+                    if self.committedText.isEmpty {
+                        self.committedText = self.currentUtteranceText
+                    } else {
+                        self.committedText += " " + self.currentUtteranceText
+                    }
+                    self.currentUtteranceText = ""
+                }
+
                 let delay = (error != nil) ? 0.1 : 0.0
                 DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
                     guard let self = self, self.isRecording else { return }
@@ -167,7 +167,8 @@ public final class SpeechManager: NSObject {
         var hints = vocab.map { $0.triggerPhrase } + vocab.map { $0.replacement }
         hints.append(contentsOf: [
             "LLM wiki", "LLM", "wiki", "skill", "skills", "Antigravity",
-            "Wispr Flow", "LocalFlow", "Ollama", "Whisper", "Remotion", "n8n", "GitHub", "macOS"
+            "Wispr Flow", "LocalFlow", "Ollama", "Whisper", "Remotion", "n8n", "GitHub", "macOS",
+            "Majha", "naav", "aahe", "Atish Maske"
         ])
         request.contextualStrings = Array(Set(hints.filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }))
     }
