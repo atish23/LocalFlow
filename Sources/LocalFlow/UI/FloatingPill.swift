@@ -6,8 +6,74 @@ public enum DictationState {
     case done
 }
 
+public final class AudioWaveformView: NSView {
+    private var bars: [CALayer] = []
+    private let barCount = 4
+    private let barWidth: CGFloat = 3.0
+    private let barSpacing: CGFloat = 3.0
+    private let minHeight: CGFloat = 4.0
+    private let maxHeight: CGFloat = 18.0
+
+    public override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        self.wantsLayer = true
+        setupBars()
+    }
+
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    private func setupBars() {
+        let totalWidth = CGFloat(barCount) * barWidth + CGFloat(barCount - 1) * barSpacing
+        let startX = (bounds.width - totalWidth) / 2.0
+        let centerY = bounds.height / 2.0
+
+        for i in 0..<barCount {
+            let bar = CALayer()
+            let x = startX + CGFloat(i) * (barWidth + barSpacing)
+            bar.frame = CGRect(x: x, y: centerY - (minHeight / 2.0), width: barWidth, height: minHeight)
+            bar.cornerRadius = barWidth / 2.0
+            bar.backgroundColor = NSColor.systemRed.cgColor
+            layer?.addSublayer(bar)
+            bars.append(bar)
+        }
+    }
+
+    public func updateLevel(_ level: Float) {
+        CATransaction.begin()
+        CATransaction.setAnimationDuration(0.08)
+        let centerY = bounds.height / 2.0
+
+        // Multipliers to create an organic wave shape across the 4 bars
+        let multipliers: [Float] = [0.65, 1.0, 0.85, 0.55]
+
+        for (i, bar) in bars.enumerated() {
+            let mult = multipliers[i % multipliers.count]
+            let scaledLevel = min(1.0, max(0.0, level * mult))
+            let h = minHeight + CGFloat(scaledLevel) * (maxHeight - minHeight)
+            bar.frame = CGRect(
+                x: bar.frame.origin.x,
+                y: centerY - (h / 2.0),
+                width: barWidth,
+                height: h
+            )
+        }
+        CATransaction.commit()
+    }
+
+    public func setColor(_ color: NSColor) {
+        CATransaction.begin()
+        CATransaction.setAnimationDuration(0.2)
+        for bar in bars {
+            bar.backgroundColor = color.cgColor
+        }
+        CATransaction.commit()
+    }
+}
+
 public final class FloatingPillPanel: NSPanel {
-    private let statusDot = NSView()
+    private let waveformView = AudioWaveformView(frame: NSRect(x: 14, y: 11, width: 24, height: 24))
     private let statusLabel = NSTextField(labelWithString: "Listening...")
     private let transcriptLabel = NSTextField(labelWithString: "")
 
@@ -53,21 +119,17 @@ public final class FloatingPillPanel: NSPanel {
         visualEffect.layer?.borderColor = NSColor.white.withAlphaComponent(0.18).cgColor
         visualEffect.layer?.borderWidth = 1.0
 
-        // Status indicator dot
-        statusDot.frame = NSRect(x: 16, y: 17, width: 12, height: 12)
-        statusDot.wantsLayer = true
-        statusDot.layer?.cornerRadius = 6
-        statusDot.layer?.backgroundColor = NSColor.systemRed.cgColor
-        visualEffect.addSubview(statusDot)
+        // Live Audio Waveform View
+        visualEffect.addSubview(waveformView)
 
         // Status text label
-        statusLabel.frame = NSRect(x: 36, y: 13, width: 120, height: 20)
+        statusLabel.frame = NSRect(x: 42, y: 13, width: 110, height: 20)
         statusLabel.font = NSFont.systemFont(ofSize: 13, weight: .semibold)
         statusLabel.textColor = .white
         visualEffect.addSubview(statusLabel)
 
         // Live preview of spoken text
-        transcriptLabel.frame = NSRect(x: 160, y: 13, width: 165, height: 20)
+        transcriptLabel.frame = NSRect(x: 156, y: 13, width: 170, height: 20)
         transcriptLabel.font = NSFont.systemFont(ofSize: 12, weight: .regular)
         transcriptLabel.textColor = NSColor.white.withAlphaComponent(0.7)
         transcriptLabel.lineBreakMode = .byTruncatingHead
@@ -76,19 +138,27 @@ public final class FloatingPillPanel: NSPanel {
         self.contentView = visualEffect
     }
 
+    public func updateAudioLevel(_ level: Float) {
+        DispatchQueue.main.async {
+            self.waveformView.updateLevel(level)
+        }
+    }
+
     public func updateState(_ state: DictationState, partialText: String = "") {
         DispatchQueue.main.async {
             switch state {
             case .listening:
-                self.statusDot.layer?.backgroundColor = NSColor.systemRed.cgColor
+                self.waveformView.setColor(NSColor.systemRed)
                 self.statusLabel.stringValue = "Listening..."
                 self.transcriptLabel.stringValue = partialText
             case .processing:
-                self.statusDot.layer?.backgroundColor = NSColor.systemOrange.cgColor
-                self.statusLabel.stringValue = "Polishing..."
+                self.waveformView.setColor(NSColor.systemOrange)
+                self.waveformView.updateLevel(0.4)
+                self.statusLabel.stringValue = "Formatting..."
                 self.transcriptLabel.stringValue = partialText
             case .done:
-                self.statusDot.layer?.backgroundColor = NSColor.systemGreen.cgColor
+                self.waveformView.setColor(NSColor.systemGreen)
+                self.waveformView.updateLevel(0.1)
                 self.statusLabel.stringValue = "Pasted!"
                 self.transcriptLabel.stringValue = ""
             }

@@ -40,9 +40,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let menu = NSMenu()
         menu.addItem(NSMenuItem(title: "Toggle Dictation (Ctrl twice / Ctrl once)", action: #selector(toggleDictation), keyEquivalent: ""))
         menu.addItem(NSMenuItem.separator())
-        menu.addItem(NSMenuItem(title: "AI Cleanup: Disabled (Direct Mode)", action: nil, keyEquivalent: ""))
-        menu.addItem(NSMenuItem(title: "Dictionary: \(config.personal_dictionary.count) custom words", action: nil, keyEquivalent: ""))
-        menu.addItem(NSMenuItem(title: "Mode: \(config.headless ? "Headless (Zero UI)" : "Floating Pill UI")", action: #selector(toggleHeadlessMode), keyEquivalent: ""))
+        menu.addItem(NSMenuItem(title: "Settings & Vocabulary...", action: #selector(openSettingsWindow), keyEquivalent: ","))
+        menu.addItem(NSMenuItem(title: "Mode: \(config.headless ? "Headless (Zero UI)" : "Floating Pill HUD")", action: #selector(toggleHeadlessMode), keyEquivalent: ""))
         menu.addItem(NSMenuItem.separator())
         menu.addItem(NSMenuItem(title: "Open Config Folder (~/.config/localflow)", action: #selector(openConfigFolder), keyEquivalent: "o"))
         menu.addItem(NSMenuItem(title: "Check Permissions", action: #selector(checkPermissions), keyEquivalent: ""))
@@ -59,6 +58,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             guard let self = self else { return }
             if !self.configManager.config.headless {
                 self.pill.updateState(.listening, partialText: partial)
+            }
+        }
+        speechManager.onAudioLevel = { [weak self] level in
+            guard let self = self else { return }
+            if !self.configManager.config.headless {
+                self.pill.updateAudioLevel(level)
             }
         }
     }
@@ -139,18 +144,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
 
             let appName = self.targetApp?.localizedName ?? "Unknown"
-            print("Direct Transcript: \"\(trimmed)\" (App: \(appName))")
+            let bundleId = self.targetApp?.bundleIdentifier
+            let appStyle = self.configManager.config.styleForApp(bundleId: bundleId)
+            print("Direct Transcript: \"\(trimmed)\" (App: \(appName), Style: \(appStyle))")
 
-            // Expand custom tags if any were configured
-            var formatted = trimmed
-            for (tagKey, tagReplacement) in self.configManager.config.tags {
-                formatted = formatted.replacingOccurrences(of: tagKey, with: tagReplacement)
-                let spokenTag = "colon " + tagKey.trimmingCharacters(in: CharacterSet(charactersIn: ":"))
-                formatted = formatted.replacingOccurrences(of: spokenTag, with: tagReplacement, options: .caseInsensitive)
-            }
-
-            // Format spoken line breaks and paragraphs (e.g. "next line", "new line")
-            formatted = AppDelegate.formatSpokenCommands(formatted)
+            // Polish text using deterministic pipeline (vocabulary, fillers, self-corrections, numbers, lists, newlines)
+            let formatted = TextPolisher.shared.polish(
+                text: trimmed,
+                style: appStyle,
+                tags: self.configManager.config.tags
+            )
 
             // Save to SQLite history store
             self.correctionStore.saveHistory(
@@ -193,33 +196,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    public static func formatSpokenCommands(_ text: String) -> String {
-        var result = text
-
-        // 1. Spoken new paragraphs -> double newline
-        let paragraphRegexes = ["\\b(?:new|next) paragraph\\b"]
-        for pattern in paragraphRegexes {
-            if let regex = try? NSRegularExpression(pattern: pattern, options: .caseInsensitive) {
-                result = regex.stringByReplacingMatches(in: result, options: [], range: NSRange(location: 0, length: result.utf16.count), withTemplate: "\n\n")
-            }
-        }
-
-        // 2. Spoken new lines -> single newline
-        let newlineRegexes = ["\\b(?:new|next) line\\b"]
-        for pattern in newlineRegexes {
-            if let regex = try? NSRegularExpression(pattern: pattern, options: .caseInsensitive) {
-                result = regex.stringByReplacingMatches(in: result, options: [], range: NSRange(location: 0, length: result.utf16.count), withTemplate: "\n")
-            }
-        }
-
-        // 3. Clean up spaces around newlines and capitalize after newline
-        let lines = result.components(separatedBy: "\n")
-        let formattedLines = lines.map { line -> String in
-            let trimmed = line.trimmingCharacters(in: .whitespaces)
-            guard let first = trimmed.first else { return "" }
-            return String(first).uppercased() + String(trimmed.dropFirst())
-        }
-        return formattedLines.joined(separator: "\n")
+    @objc private func openSettingsWindow() {
+        SettingsWindowManager.shared.showSettings()
     }
 
     @objc private func quitApp() {

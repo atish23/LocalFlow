@@ -9,10 +9,12 @@ public final class SpeechManager: NSObject {
     private let audioEngine = AVAudioEngine()
     
     public var onPartialTranscript: ((String) -> Void)?
+    public var onAudioLevel: ((Float) -> Void)?
     public private(set) var isRecording = false
     
     private var committedText = ""
     private var currentUtteranceText = ""
+    private var lastLevelDispatchTime: TimeInterval = 0
 
     public override init() {
         super.init()
@@ -62,7 +64,9 @@ public final class SpeechManager: NSObject {
         let recordingFormat = inputNode.outputFormat(forBus: 0)
         inputNode.removeTap(onBus: 0)
         inputNode.installTap(onBus: 0, bufferSize: 1024, format: recordingFormat) { [weak self] buffer, _ in
-            self?.recognitionRequest?.append(buffer)
+            guard let self = self else { return }
+            self.recognitionRequest?.append(buffer)
+            self.dispatchAudioLevelIfNeeded(from: buffer)
         }
 
         audioEngine.prepare()
@@ -150,10 +154,45 @@ public final class SpeechManager: NSObject {
 
         let recordingFormat = inputNode.outputFormat(forBus: 0)
         inputNode.installTap(onBus: 0, bufferSize: 1024, format: recordingFormat) { [weak self] buffer, _ in
-            self?.recognitionRequest?.append(buffer)
+            guard let self = self else { return }
+            self.recognitionRequest?.append(buffer)
+            self.dispatchAudioLevelIfNeeded(from: buffer)
         }
 
         setupRecognitionTask()
+    }
+
+    private func dispatchAudioLevelIfNeeded(from buffer: AVAudioPCMBuffer) {
+        guard let onLevel = onAudioLevel else { return }
+        let now = Date().timeIntervalSince1970
+        // Throttle updates to ~40fps (every 25ms) to prevent UI thread thrashing
+        guard now - lastLevelDispatchTime > 0.025 else { return }
+        lastLevelDispatchTime = now
+
+        let level = computeRMSLevel(buffer: buffer)
+        DispatchQueue.main.async {
+            onLevel(level)
+        }
+    }
+
+    private func computeRMSLevel(buffer: AVAudioPCMBuffer) -> Float {
+        guard let channelData = buffer.floatChannelData else { return 0.0 }
+        let channelDataValue = channelData.pointee
+        let frameLength = Int(buffer.frameLength)
+        guard frameLength > 0 else { return 0.0 }
+
+        var sum: Float = 0.0
+        for i in 0..<frameLength {
+            let sample = channelDataValue[i]
+            sum += sample * sample
+        }
+        let rms = sqrt(sum / Float(frameLength))
+        // Decibel conversion with normalization: -50 dB to -10 dB -> 0.0 to 1.0
+        let db = 20 * log10(max(rms, 0.00001))
+        let minDb: Float = -50.0
+        let maxDb: Float = -12.0
+        let normalized = max(0.0, min(1.0, (db - minDb) / (maxDb - minDb)))
+        return normalized
     }
 
     public func stopRecording(completion: @escaping (String) -> Void) {

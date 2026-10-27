@@ -8,6 +8,14 @@ public struct LocalFlowConfig: Codable {
     public var tags: [String: String]
     public var style_instructions: String
     public var double_tap_threshold_ms: Int
+    public var app_styles: [String: String]?
+
+    public func styleForApp(bundleId: String?) -> AppStyle {
+        guard let bundleId = bundleId, let map = app_styles, let styleStr = map[bundleId] else {
+            return .standard
+        }
+        return AppStyle(rawValue: styleStr) ?? .standard
+    }
 
     public static var `default`: LocalFlowConfig {
         LocalFlowConfig(
@@ -26,7 +34,16 @@ public struct LocalFlowConfig: Codable {
                 ":email": "my.email@domain.com"
             ],
             style_instructions: "Natural, direct, and conversational. Keep my personal tone, avoid unnecessary corporate filler, and format lists or numbers cleanly.",
-            double_tap_threshold_ms: 400
+            double_tap_threshold_ms: 400,
+            app_styles: [
+                "com.tinyspeck.slackmacgap": "casual",
+                "org.whispersystems.signal-desktop": "casual",
+                "com.apple.MobileSMS": "casual",
+                "com.apple.mail": "formal",
+                "com.google.Chrome": "standard",
+                "com.apple.Terminal": "code",
+                "com.microsoft.VSCode": "code"
+            ]
         )
     }
 }
