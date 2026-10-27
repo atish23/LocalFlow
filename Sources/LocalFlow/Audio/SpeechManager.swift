@@ -15,6 +15,7 @@ public final class SpeechManager: NSObject {
     private var committedText = ""
     private var currentUtteranceText = ""
     private var lastLevelDispatchTime: TimeInterval = 0
+    private var lastVoiceDetectedTime: TimeInterval = 0
 
     public override init() {
         super.init()
@@ -39,7 +40,23 @@ public final class SpeechManager: NSObject {
         let current = currentUtteranceText.trimmingCharacters(in: .whitespacesAndNewlines)
         if committed.isEmpty { return current }
         if current.isEmpty { return committed }
+        if current.lowercased().hasPrefix(committed.lowercased()) {
+            return current
+        }
         return "\(committed) \(current)"
+    }
+
+    private func commitCurrentUtterance() {
+        let trimmed = currentUtteranceText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        if committedText.isEmpty {
+            committedText = trimmed
+        } else {
+            if !committedText.hasSuffix(trimmed) {
+                committedText += " " + trimmed
+            }
+        }
+        currentUtteranceText = ""
     }
 
     public func startRecording(completion: @escaping (Result<Void, Error>) -> Void) {
@@ -48,6 +65,7 @@ public final class SpeechManager: NSObject {
         cleanupRecording()
         committedText = ""
         currentUtteranceText = ""
+        lastVoiceDetectedTime = Date().timeIntervalSince1970
 
         recognitionRequest = SFSpeechAudioBufferRecognitionRequest()
         guard let recognitionRequest = recognitionRequest else {
@@ -87,20 +105,25 @@ public final class SpeechManager: NSObject {
 
             if let result = result {
                 let text = result.bestTranscription.formattedString.trimmingCharacters(in: .whitespacesAndNewlines)
+                let now = Date().timeIntervalSince1970
+
+                // Detect if Apple's recognizer reset its formattedString after a silence pause
+                // (i.e. New utterance started, text is disjoint from previous utterance)
+                let isDisjoint = !self.currentUtteranceText.isEmpty &&
+                                 !text.lowercased().hasPrefix(self.currentUtteranceText.lowercased()) &&
+                                 !self.currentUtteranceText.lowercased().hasPrefix(text.lowercased())
+
+                // Disjoint text after a pause of silence (>0.5s) or massive length drop means previous sentence completed
+                if isDisjoint && (now - self.lastVoiceDetectedTime > 0.5 || text.count < max(1, self.currentUtteranceText.count / 2)) {
+                    self.commitCurrentUtterance()
+                }
 
                 if result.isFinal {
-                    // Task finalized cleanly: commit this entire chunk and clear current utterance
                     if !text.isEmpty {
-                        if self.committedText.isEmpty {
-                            self.committedText = text
-                        } else {
-                            self.committedText += " " + text
-                        }
+                        self.currentUtteranceText = text
+                        self.commitCurrentUtterance()
                     }
-                    self.currentUtteranceText = ""
                 } else {
-                    // Ongoing streaming hypothesis: ALWAYS update currentUtteranceText cleanly
-                    // NEVER append partial hypotheses to committedText while in the same task!
                     self.currentUtteranceText = text
                 }
 
@@ -113,14 +136,8 @@ public final class SpeechManager: NSObject {
             // If the recognition task ended (due to pause isFinal or temporary error)
             // but the user is STILL recording, seamlessly spin up a new task without stopping audio
             if self.isRecording && (result?.isFinal == true || error != nil) {
-                // If there was uncommitted current utterance on error, commit it before restart
                 if !self.currentUtteranceText.isEmpty {
-                    if self.committedText.isEmpty {
-                        self.committedText = self.currentUtteranceText
-                    } else {
-                        self.committedText += " " + self.currentUtteranceText
-                    }
-                    self.currentUtteranceText = ""
+                    self.commitCurrentUtterance()
                 }
 
                 let delay = (error != nil) ? 0.1 : 0.0
@@ -174,13 +191,17 @@ public final class SpeechManager: NSObject {
     }
 
     private func dispatchAudioLevelIfNeeded(from buffer: AVAudioPCMBuffer) {
-        guard let onLevel = onAudioLevel else { return }
+        let level = computeRMSLevel(buffer: buffer)
         let now = Date().timeIntervalSince1970
+        if level > 0.08 {
+            lastVoiceDetectedTime = now
+        }
+
+        guard let onLevel = onAudioLevel else { return }
         // Throttle updates to ~40fps (every 25ms) to prevent UI thread thrashing
         guard now - lastLevelDispatchTime > 0.025 else { return }
         lastLevelDispatchTime = now
 
-        let level = computeRMSLevel(buffer: buffer)
         DispatchQueue.main.async {
             onLevel(level)
         }
