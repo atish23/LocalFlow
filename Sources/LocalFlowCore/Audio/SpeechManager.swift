@@ -2,26 +2,77 @@ import Foundation
 import Speech
 import AVFoundation
 
-public final class SpeechManager: NSObject {
-    private let speechRecognizer = SFSpeechRecognizer(locale: Locale(identifier: "en-US"))
+public final class SpeechManager: NSObject, SFSpeechRecognizerDelegate {
+    private var speechRecognizer = SFSpeechRecognizer(locale: Locale(identifier: "en-US"))
     private var recognitionRequest: SFSpeechAudioBufferRecognitionRequest?
     private var recognitionTask: SFSpeechRecognitionTask?
     private let audioEngine = AVAudioEngine()
-    
+
     public var onPartialTranscript: ((String) -> Void)?
     public var onAudioLevel: ((Float) -> Void)?
+    public var onError: ((String) -> Void)?
     public private(set) var isRecording = false
-    
+
     private var committedSegments: [String] = []
     private var currentTaskText: String = ""
     private var lastLevelDispatchTime: TimeInterval = 0
     private var lastVoiceDetectedTime: TimeInterval = 0
     private var stopCompletion: ((String) -> Void)?
+    private var interruptionObserver: NSObjectProtocol?
 
     public override init() {
         super.init()
         if let recognizer = speechRecognizer {
             recognizer.defaultTaskHint = .dictation
+            recognizer.delegate = self
+        }
+        setupInterruptionHandling()
+    }
+
+    deinit {
+        if let observer = interruptionObserver {
+            NotificationCenter.default.removeObserver(observer)
+        }
+        cleanupRecording()
+    }
+
+    private func setupInterruptionHandling() {
+        interruptionObserver = NotificationCenter.default.addObserver(
+            forName: .AVAudioEngineConfigurationChange,
+            object: audioEngine,
+            queue: .main
+        ) { [weak self] _ in
+            guard let self = self, self.isRecording else { return }
+            print("SpeechManager: Audio engine configuration change detected (device route changed).")
+            // Safely recover recording pipeline without crashing
+            self.handleAudioInterruption()
+        }
+    }
+
+    private func handleAudioInterruption() {
+        guard isRecording else { return }
+        if !currentTaskText.isEmpty {
+            commitSegment(currentTaskText)
+            currentTaskText = ""
+        }
+        do {
+            if audioEngine.isRunning {
+                audioEngine.stop()
+            }
+            audioEngine.inputNode.removeTap(onBus: 0)
+            let inputNode = audioEngine.inputNode
+            let recordingFormat = inputNode.outputFormat(forBus: 0)
+            inputNode.installTap(onBus: 0, bufferSize: 1024, format: recordingFormat) { [weak self] buffer, _ in
+                guard let self = self else { return }
+                self.recognitionRequest?.append(buffer)
+                self.dispatchAudioLevelIfNeeded(from: buffer)
+            }
+            try audioEngine.start()
+            restartRecognitionTask()
+        } catch {
+            print("SpeechManager: Failed to restart audio engine after route change: \(error.localizedDescription)")
+            onError?("Audio input device changed or disconnected.")
+            cleanupRecording()
         }
     }
 
@@ -97,7 +148,6 @@ public final class SpeechManager: NSObject {
             }
 
             if commonPrefixCount >= 3 && commonPrefixCount >= min(lastWords.count, newWords.count) / 2 {
-                // This is a refined acoustic revision of the same sentence: replace, never duplicate
                 committedSegments[committedSegments.count - 1] = trimmed
                 return
             }
@@ -108,7 +158,7 @@ public final class SpeechManager: NSObject {
 
     public func startRecording(completion: @escaping (Result<Void, Error>) -> Void) {
         guard !isRecording else { return }
-        
+
         cleanupRecording()
         committedSegments.removeAll()
         currentTaskText = ""
@@ -117,7 +167,8 @@ public final class SpeechManager: NSObject {
 
         recognitionRequest = SFSpeechAudioBufferRecognitionRequest()
         guard let recognitionRequest = recognitionRequest else {
-            completion(.failure(NSError(domain: "LocalFlow", code: -1, userInfo: [NSLocalizedDescriptionKey: "Unable to create recognition request"])))
+            let err = NSError(domain: "LocalFlow", code: -1, userInfo: [NSLocalizedDescriptionKey: "Unable to create recognition request"])
+            completion(.failure(err))
             return
         }
 
@@ -166,13 +217,13 @@ public final class SpeechManager: NSObject {
                 }
             }
 
-            // If user stopped recording and Apple emitted the final transcription, complete cleanly
+            // If user requested stop and Apple emitted final result or error, complete cleanly
             if self.stopCompletion != nil && (result?.isFinal == true || error != nil) {
                 self.finishStopRecording()
                 return
             }
 
-            // If task finalized during recording (speech pause or transient error), restart seamlessly
+            // If task finalized during recording (silence pause or minor error), restart seamlessly
             if self.isRecording && (result?.isFinal == true || error != nil) {
                 if !self.currentTaskText.isEmpty {
                     self.commitSegment(self.currentTaskText)
@@ -207,7 +258,6 @@ public final class SpeechManager: NSObject {
             request.requiresOnDeviceRecognition = true
         }
 
-        // Bias Apple Neural Engine acoustic decoder with custom vocabulary & domain terms
         let vocab = CorrectionStore.shared.getAllVocabulary()
         var hints = vocab.map { $0.triggerPhrase } + vocab.map { $0.replacement }
         hints.append(contentsOf: [
@@ -226,7 +276,7 @@ public final class SpeechManager: NSObject {
         }
 
         guard let onLevel = onAudioLevel else { return }
-        // Throttle updates to ~40fps (every 25ms) to prevent UI thread thrashing
+        // Throttle updates to ~40fps (every 25ms)
         guard now - lastLevelDispatchTime > 0.025 else { return }
         lastLevelDispatchTime = now
 
@@ -247,7 +297,6 @@ public final class SpeechManager: NSObject {
             sum += sample * sample
         }
         let rms = sqrt(sum / Float(frameLength))
-        // Decibel conversion with normalization: -50 dB to -10 dB -> 0.0 to 1.0
         let db = 20 * log10(max(rms, 0.00001))
         let minDb: Float = -50.0
         let maxDb: Float = -12.0
@@ -264,14 +313,11 @@ public final class SpeechManager: NSObject {
         isRecording = false
         stopCompletion = completion
 
-        // Stop microphone input so no more audio is added
         audioEngine.stop()
         audioEngine.inputNode.removeTap(onBus: 0)
-
-        // Tell recognizer that audio input ended so it can process final audio frames
         recognitionRequest?.endAudio()
 
-        // Watchdog fallback: if Apple takes longer than 750ms to emit isFinal, complete cleanly
+        // Fallback watchdog: if Apple takes longer than 750ms to emit isFinal, complete cleanly
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.75) { [weak self] in
             guard let self = self, self.stopCompletion != nil else { return }
             self.finishStopRecording()
@@ -294,14 +340,25 @@ public final class SpeechManager: NSObject {
         }
     }
 
-    private func cleanupRecording() {
+    public func cleanupRecording() {
         if audioEngine.isRunning {
             audioEngine.stop()
-            audioEngine.inputNode.removeTap(onBus: 0)
         }
+        audioEngine.inputNode.removeTap(onBus: 0)
+        audioEngine.reset()
         recognitionTask?.cancel()
         recognitionRequest = nil
         recognitionTask = nil
         isRecording = false
+    }
+
+    // SFSpeechRecognizerDelegate
+    public func speechRecognizer(_ speechRecognizer: SFSpeechRecognizer, availabilityDidChange available: Bool) {
+        if !available {
+            print("SpeechManager: SFSpeechRecognizer is currently unavailable.")
+            if isRecording {
+                onError?("Speech recognition service temporarily unavailable.")
+            }
+        }
     }
 }

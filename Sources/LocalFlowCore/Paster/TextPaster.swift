@@ -3,7 +3,7 @@ import Carbon
 
 public final class TextPaster {
     public static let shared = TextPaster()
-    
+
     private init() {}
 
     public static func isAccessibilityTrusted() -> Bool {
@@ -25,7 +25,7 @@ public final class TextPaster {
         let isTrusted = AXIsProcessTrusted()
         print("TextPaster: AXIsProcessTrusted = \(isTrusted)")
         if !isTrusted {
-            print("⚠️ LocalFlow does not have Accessibility permission! Requesting...")
+            print("Warning: LocalFlow does not have Accessibility permission. Requesting...")
             Self.requestAccessibilityPermission()
         }
 
@@ -42,6 +42,7 @@ public final class TextPaster {
         // 3. Pause 220ms to ensure target window (e.g. Electron/Chromium/Terminal) has active focus before Cmd+V
         DispatchQueue.global(qos: .userInteractive).asyncAfter(deadline: .now() + 0.22) {
             self.simulateCmdV()
+            HapticFeedback.shared.trigger(.success)
             DispatchQueue.main.async {
                 completion?()
             }

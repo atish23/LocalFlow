@@ -4,6 +4,7 @@ public enum DictationState {
     case listening
     case processing
     case done
+    case error
 }
 
 public final class AudioWaveformView: NSView {
@@ -45,7 +46,6 @@ public final class AudioWaveformView: NSView {
         CATransaction.setAnimationDuration(0.08)
         let centerY = bounds.height / 2.0
 
-        // Multipliers to create an organic wave shape across the 4 bars
         let multipliers: [Float] = [0.65, 1.0, 0.85, 0.55]
 
         for (i, bar) in bars.enumerated() {
@@ -78,7 +78,7 @@ public final class FloatingPillPanel: NSPanel {
     private let transcriptLabel = NSTextField(labelWithString: "")
 
     public init() {
-        let width: CGFloat = 340
+        let width: CGFloat = 360
         let height: CGFloat = 46
         let screenRect = NSScreen.main?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
         let rect = NSRect(
@@ -123,13 +123,13 @@ public final class FloatingPillPanel: NSPanel {
         visualEffect.addSubview(waveformView)
 
         // Status text label
-        statusLabel.frame = NSRect(x: 42, y: 13, width: 110, height: 20)
+        statusLabel.frame = NSRect(x: 44, y: 13, width: 110, height: 20)
         statusLabel.font = NSFont.systemFont(ofSize: 13, weight: .semibold)
         statusLabel.textColor = .white
         visualEffect.addSubview(statusLabel)
 
         // Live preview of spoken text
-        transcriptLabel.frame = NSRect(x: 156, y: 13, width: 170, height: 20)
+        transcriptLabel.frame = NSRect(x: 156, y: 13, width: 190, height: 20)
         transcriptLabel.font = NSFont.systemFont(ofSize: 12, weight: .regular)
         transcriptLabel.textColor = NSColor.white.withAlphaComponent(0.7)
         transcriptLabel.lineBreakMode = .byTruncatingHead
@@ -154,13 +154,18 @@ public final class FloatingPillPanel: NSPanel {
             case .processing:
                 self.waveformView.setColor(NSColor.systemOrange)
                 self.waveformView.updateLevel(0.4)
-                self.statusLabel.stringValue = "Formatting..."
+                self.statusLabel.stringValue = "Polishing..."
                 self.transcriptLabel.stringValue = partialText
             case .done:
                 self.waveformView.setColor(NSColor.systemGreen)
                 self.waveformView.updateLevel(0.1)
                 self.statusLabel.stringValue = "Pasted!"
                 self.transcriptLabel.stringValue = ""
+            case .error:
+                self.waveformView.setColor(NSColor.systemRed)
+                self.waveformView.updateLevel(0.0)
+                self.statusLabel.stringValue = "Error"
+                self.transcriptLabel.stringValue = partialText
             }
         }
     }

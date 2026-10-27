@@ -23,7 +23,7 @@ public final class TextPolisher {
             result = result.replacingOccurrences(of: spokenTag, with: tagReplacement, options: .caseInsensitive)
         }
 
-        // 2. Vocabulary & phonetic jargon replacement from SQLite
+        // 2. Vocabulary and phonetic jargon replacement from SQLite
         result = applyVocabulary(result)
 
         // 3. Resolve mid-sentence self-corrections ("actually", "wait no", "I mean")
@@ -51,7 +51,7 @@ public final class TextPolisher {
     }
 
     // MARK: - 1. Vocabulary Replacement
-    private func applyVocabulary(_ text: String) -> String {
+    public func applyVocabulary(_ text: String) -> String {
         var processed = text
         let vocabList = CorrectionStore.shared.getAllVocabulary()
 
@@ -88,10 +88,8 @@ public final class TextPolisher {
     }
 
     // MARK: - 2. Self-Correction Resolver
-    private func resolveSelfCorrections(_ text: String) -> String {
+    public func resolveSelfCorrections(_ text: String) -> String {
         var processed = text
-        // Patterns like: "let's do Monday, actually Tuesday" -> "let's do Tuesday"
-        // "at 5 PM, wait no 6 PM" -> "at 6 PM"
         let backtrackPatterns = [
             ",?\\s*\\bwait\\s+no\\b\\s*",
             ",?\\s*\\bactually\\b\\s*",
@@ -101,7 +99,6 @@ public final class TextPolisher {
 
         for pattern in backtrackPatterns {
             if let regex = try? NSRegularExpression(pattern: "([^,.!?]+?)" + pattern + "([^,.!?]+)", options: .caseInsensitive) {
-                // If the phrase after the backtrack is similar in category/length, replace the first clause
                 let matches = regex.matches(in: processed, options: [], range: NSRange(location: 0, length: processed.utf16.count))
                 for match in matches.reversed() {
                     if let correctionRange = Range(match.range(at: 2), in: processed) {
@@ -117,7 +114,7 @@ public final class TextPolisher {
     }
 
     // MARK: - 3. Filler Word & Stammer Removal
-    private func removeFillerWords(_ text: String) -> String {
+    public func removeFillerWords(_ text: String) -> String {
         var processed = text
 
         // Remove filler words (um, uh, er, ah)
@@ -131,7 +128,7 @@ public final class TextPolisher {
             )
         }
 
-        // Remove immediate duplicate repeated words (e.g., "I I think" -> "I think", "the the" -> "the")
+        // Remove immediate duplicate repeated words (e.g., "I I think" -> "I think")
         let stammerPattern = "\\b([a-zA-Z0-9]+)\\s+\\1\\b"
         if let regex = try? NSRegularExpression(pattern: stammerPattern, options: .caseInsensitive) {
             for _ in 0..<3 {
@@ -144,8 +141,7 @@ public final class TextPolisher {
             }
         }
 
-        // Remove repeated phrases or clauses (e.g., "Atish Maske Atish Maske" -> "Atish Maske",
-        // or "push to get up commit one EC0550 push to get up commit one EC0550")
+        // Remove repeated phrases or clauses
         let clausePattern = "\\b([a-zA-Z0-9]+(?:\\s+[a-zA-Z0-9]+){1,25})\\s+\\1\\b"
         if let regex = try? NSRegularExpression(pattern: clausePattern, options: .caseInsensitive) {
             for _ in 0..<3 {
@@ -164,7 +160,6 @@ public final class TextPolisher {
     public func deduplicateSentences(_ text: String) -> String {
         var processed = text
 
-        // Deduplicate repeated sentences with punctuation
         let sentencePattern = "([A-Z0-9][^.!?]*[.!?](?:\\s+[A-Z0-9][^.!?]*[.!?])*?)\\s+\\1"
         if let regex = try? NSRegularExpression(pattern: sentencePattern, options: .caseInsensitive) {
             for _ in 0..<3 {
@@ -177,7 +172,6 @@ public final class TextPolisher {
             }
         }
 
-        // Also clean any unpunctuated repeated phrases that might remain
         let clausePattern = "\\b([a-zA-Z0-9]+(?:\\s+[a-zA-Z0-9]+){1,25})\\s+\\1\\b"
         if let regex = try? NSRegularExpression(pattern: clausePattern, options: .caseInsensitive) {
             for _ in 0..<3 {
@@ -194,7 +188,7 @@ public final class TextPolisher {
     }
 
     // MARK: - 4. Numbers & Currency
-    private func formatNumbersAndCurrencies(_ text: String) -> String {
+    public func formatNumbersAndCurrencies(_ text: String) -> String {
         var processed = text
 
         // Percentages: "25 percent" -> "25%"
@@ -229,15 +223,12 @@ public final class TextPolisher {
             )
         }
 
-        // Fiscal Years: "FY 2627", "year 2627", "three year 2627" -> "FY 26-27"
         processed = formatFiscalYears(processed)
-
         return processed
     }
 
-    private func formatFiscalYears(_ text: String) -> String {
+    public func formatFiscalYears(_ text: String) -> String {
         var processed = text
-        // Acoustic mishearings
         let acousticFixes = [
             ("(?i)\\bfinancial leader\\b", "financial ledger"),
             ("(?i)\\b(?:for\\s+)?three\\s+year\\s+(\\d{4})\\b", "for FY $1"),
@@ -249,7 +240,6 @@ public final class TextPolisher {
             }
         }
 
-        // Pattern: "(year|FY|financial year)? 2627" -> "FY 26-27" when year digits are sequential
         let fyPattern = "(?i)\\b(FY\\s*|financial\\s+year\\s*|fiscal\\s+year\\s*|year\\s*)?(\\d{2})(\\d{2})\\b"
         if let regex = try? NSRegularExpression(pattern: fyPattern) {
             let matches = regex.matches(in: processed, options: [], range: NSRange(location: 0, length: processed.utf16.count))
@@ -277,10 +267,9 @@ public final class TextPolisher {
     }
 
     // MARK: - 5. Spoken Punctuation & Newlines
-    private func formatSpokenPunctuationAndNewlines(_ text: String) -> String {
+    public func formatSpokenPunctuationAndNewlines(_ text: String) -> String {
         var result = text
 
-        // Double newlines
         let paragraphRegexes = ["\\b(?:new|next) paragraph\\b"]
         for pattern in paragraphRegexes {
             if let regex = try? NSRegularExpression(pattern: pattern, options: .caseInsensitive) {
@@ -288,7 +277,6 @@ public final class TextPolisher {
             }
         }
 
-        // Single newlines
         let newlineRegexes = ["\\b(?:new|next) line\\b"]
         for pattern in newlineRegexes {
             if let regex = try? NSRegularExpression(pattern: pattern, options: .caseInsensitive) {
@@ -296,7 +284,6 @@ public final class TextPolisher {
             }
         }
 
-        // Spoken punctuation words
         let punctuationMap: [(String, String)] = [
             ("\\s*\\bperiod\\b", "."),
             ("\\s*\\bfull stop\\b", "."),
@@ -312,7 +299,6 @@ public final class TextPolisher {
             }
         }
 
-        // Capitalize character after newline
         let lines = result.components(separatedBy: "\n")
         let formattedLines = lines.map { line -> String in
             let trimmed = line.trimmingCharacters(in: .whitespaces)
@@ -323,9 +309,8 @@ public final class TextPolisher {
     }
 
     // MARK: - 6. Structured Lists
-    private func formatStructuredLists(_ text: String) -> String {
+    public func formatStructuredLists(_ text: String) -> String {
         var processed = text
-        // Convert "point 1 do this point 2 do that" or "number 1 ... number 2 ..."
         let listPattern = "(?:^|\\s)(?:point|number)\\s+(\\d+)[.:]?\\s+"
         if let regex = try? NSRegularExpression(pattern: listPattern, options: .caseInsensitive) {
             processed = regex.stringByReplacingMatches(
@@ -339,13 +324,11 @@ public final class TextPolisher {
     }
 
     // MARK: - 7. App-Aware Styles
-    private func applyAppStyle(_ text: String, style: AppStyle) -> String {
+    public func applyAppStyle(_ text: String, style: AppStyle) -> String {
         switch style {
         case .casual:
-            // Friendly contractions and clean spacing
             return text
         case .formal:
-            // Ensure first letter of sentences is capitalized and clean period at end
             var formal = text
             if let first = formal.first {
                 formal = String(first).uppercased() + String(formal.dropFirst())

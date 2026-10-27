@@ -1,0 +1,37 @@
+name: Build and Test
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build-and-test:
+    runs-on: macos-14
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Verify Swift version
+        run: swift --version
+
+      - name: Run Unit Tests
+        run: swift test --verbose
+
+      - name: Build Release Binary
+        run: swift build -c release
+
+      - name: Package Application Bundle & Disk Image
+        run: |
+          chmod +x package.sh scripts/create_dmg.sh
+          ./package.sh --dmg
+
+      - name: Upload Release Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: LocalFlow-macOS-Release
+          path: |
+            build/*.dmg
+            LocalFlow.app
+          if-no-files-found: error

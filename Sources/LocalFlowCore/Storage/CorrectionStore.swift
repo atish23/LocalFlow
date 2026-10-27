@@ -1,22 +1,37 @@
 import Foundation
 import SQLite3
 
-public struct HistoryEntry {
+public struct HistoryEntry: Identifiable, Hashable {
     public let id: Int64
     public let rawTranscript: String
     public let polishedText: String
     public let appName: String
     public let timestamp: Date
+
+    public init(id: Int64, rawTranscript: String, polishedText: String, appName: String, timestamp: Date) {
+        self.id = id
+        self.rawTranscript = rawTranscript
+        self.polishedText = polishedText
+        self.appName = appName
+        self.timestamp = timestamp
+    }
 }
 
-public struct CorrectionEntry {
+public struct CorrectionEntry: Identifiable, Hashable {
     public let id: Int64
     public let originalText: String
     public let correctedText: String
     public let timestamp: Date
+
+    public init(id: Int64, originalText: String, correctedText: String, timestamp: Date) {
+        self.id = id
+        self.originalText = originalText
+        self.correctedText = correctedText
+        self.timestamp = timestamp
+    }
 }
 
-public struct VocabularyEntry: Identifiable, Hashable {
+public struct VocabularyEntry: Identifiable, Hashable, Codable {
     public let id: Int64
     public let triggerPhrase: String
     public let replacement: String
@@ -24,7 +39,7 @@ public struct VocabularyEntry: Identifiable, Hashable {
     public let useCount: Int
     public let createdAt: Date
 
-    public init(id: Int64, triggerPhrase: String, replacement: String, category: String = "general", useCount: Int = 1, createdAt: Date = Date()) {
+    public init(id: Int64 = 0, triggerPhrase: String, replacement: String, category: String = "general", useCount: Int = 1, createdAt: Date = Date()) {
         self.id = id
         self.triggerPhrase = triggerPhrase
         self.replacement = replacement
@@ -36,16 +51,24 @@ public struct VocabularyEntry: Identifiable, Hashable {
 
 public final class CorrectionStore {
     public static let shared = CorrectionStore()
-    
+
     private var db: OpaquePointer?
     private let dbPath: String
     private let styleFilePath: String
 
-    private init() {
-        let home = FileManager.default.homeDirectoryForCurrentUser
-        let baseDir = home.appendingPathComponent(".config/localflow")
-        dbPath = baseDir.appendingPathComponent("history.db").path
-        styleFilePath = baseDir.appendingPathComponent("my_style.txt").path
+    public init(inMemory: Bool = false) {
+        if inMemory {
+            self.dbPath = ":memory:"
+            self.styleFilePath = ""
+        } else {
+            let home = FileManager.default.homeDirectoryForCurrentUser
+            let baseDir = home.appendingPathComponent(".config/localflow")
+            if !FileManager.default.fileExists(atPath: baseDir.path) {
+                try? FileManager.default.createDirectory(at: baseDir, withIntermediateDirectories: true)
+            }
+            self.dbPath = baseDir.appendingPathComponent("history.db").path
+            self.styleFilePath = baseDir.appendingPathComponent("my_style.txt").path
+        }
 
         openDatabase()
         createTables()
@@ -165,6 +188,7 @@ public final class CorrectionStore {
     }
 
     public func loadPersonalStyleSamples() -> String {
+        guard !styleFilePath.isEmpty else { return "" }
         if let content = try? String(contentsOfFile: styleFilePath, encoding: .utf8) {
             let lines = content.components(separatedBy: .newlines)
                 .map { $0.trimmingCharacters(in: .whitespaces) }
@@ -182,6 +206,36 @@ public final class CorrectionStore {
         var entries: [VocabularyEntry] = []
 
         if sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK {
+            while sqlite3_step(stmt) == SQLITE_ROW {
+                let id = sqlite3_column_int64(stmt, 0)
+                let trigger = String(cString: sqlite3_column_text(stmt, 1))
+                let repl = String(cString: sqlite3_column_text(stmt, 2))
+                let cat = sqlite3_column_text(stmt, 3).map { String(cString: $0) } ?? "general"
+                let count = Int(sqlite3_column_int(stmt, 4))
+                let date = Date(timeIntervalSince1970: sqlite3_column_double(stmt, 5))
+
+                entries.append(VocabularyEntry(id: id, triggerPhrase: trigger, replacement: repl, category: cat, useCount: count, createdAt: date))
+            }
+        }
+        sqlite3_finalize(stmt)
+        return entries
+    }
+
+    public func searchVocabulary(query: String) -> [VocabularyEntry] {
+        let q = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        if q.isEmpty { return getAllVocabulary() }
+
+        let sql = "SELECT id, trigger_phrase, replacement, category, use_count, created_at FROM vocabulary WHERE trigger_phrase LIKE ? OR replacement LIKE ? OR category LIKE ? ORDER BY use_count DESC, id DESC;"
+        var stmt: OpaquePointer?
+        var entries: [VocabularyEntry] = []
+
+        if sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK {
+            let wildcard = "%\(q)%"
+            let SQLITE_TRANSIENT = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
+            sqlite3_bind_text(stmt, 1, wildcard, -1, SQLITE_TRANSIENT)
+            sqlite3_bind_text(stmt, 2, wildcard, -1, SQLITE_TRANSIENT)
+            sqlite3_bind_text(stmt, 3, wildcard, -1, SQLITE_TRANSIENT)
+
             while sqlite3_step(stmt) == SQLITE_ROW {
                 let id = sqlite3_column_int64(stmt, 0)
                 let trigger = String(cString: sqlite3_column_text(stmt, 1))
@@ -225,6 +279,59 @@ public final class CorrectionStore {
         sqlite3_finalize(stmt)
     }
 
+    public func exportVocabularyJSON() -> String {
+        let entries = getAllVocabulary()
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        encoder.dateEncodingStrategy = .iso8601
+        if let data = try? encoder.encode(entries), let str = String(data: data, encoding: .utf8) {
+            return str
+        }
+        return "[]"
+    }
+
+    public func exportVocabularyCSV() -> String {
+        let entries = getAllVocabulary()
+        var csv = "TriggerPhrase,Replacement,Category,UseCount\n"
+        for entry in entries {
+            let trigger = entry.triggerPhrase.replacingOccurrences(of: "\"", with: "\"\"")
+            let repl = entry.replacement.replacingOccurrences(of: "\"", with: "\"\"")
+            csv += "\"\(trigger)\",\"\(repl)\",\"\(entry.category)\",\(entry.useCount)\n"
+        }
+        return csv
+    }
+
+    public func importVocabulary(fromJSON jsonString: String) throws -> Int {
+        guard let data = jsonString.data(using: .utf8) else { return 0 }
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let entries = try decoder.decode([VocabularyEntry].self, from: data)
+        for entry in entries {
+            saveVocabulary(triggerPhrase: entry.triggerPhrase, replacement: entry.replacement, category: entry.category)
+        }
+        return entries.count
+    }
+
+    public func importVocabulary(fromCSV csvString: String) -> Int {
+        let lines = csvString.components(separatedBy: .newlines)
+        var count = 0
+        for line in lines.dropFirst() {
+            let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else { continue }
+            let parts = trimmed.components(separatedBy: ",")
+            if parts.count >= 2 {
+                let trigger = parts[0].trimmingCharacters(in: CharacterSet(charactersIn: "\" "))
+                let repl = parts[1].trimmingCharacters(in: CharacterSet(charactersIn: "\" "))
+                let cat = parts.count >= 3 ? parts[2].trimmingCharacters(in: CharacterSet(charactersIn: "\" ")) : "general"
+                if !trigger.isEmpty && !repl.isEmpty {
+                    saveVocabulary(triggerPhrase: trigger, replacement: repl, category: cat)
+                    count += 1
+                }
+            }
+        }
+        return count
+    }
+
     public func seedDefaultVocabularyIfEmpty() {
         let countSQL = "SELECT COUNT(*) FROM vocabulary;"
         var stmt: OpaquePointer?
@@ -239,7 +346,6 @@ public final class CorrectionStore {
         guard count == 0 else { return }
 
         let defaults: [(String, String, String)] = [
-            // Personal & Family
             ("atish maske", "Atish Maske", "person"),
             ("atish", "Atish", "person"),
             ("ruchita maske", "Ruchita Maske", "person"),
@@ -247,8 +353,6 @@ public final class CorrectionStore {
             ("andrej karpathy", "Andrej Karpathy", "person"),
             ("karpathy", "Karpathy", "person"),
             ("vannevar bush", "Vannevar Bush", "person"),
-
-            // Locations
             ("pune", "Pune", "location"),
             ("kalyani nagar", "Kalyani Nagar", "location"),
             ("dattwadi", "Dattwadi", "location"),
@@ -257,8 +361,6 @@ public final class CorrectionStore {
             ("mumbai", "Mumbai", "location"),
             ("anp ultimus", "ANP Ultimus", "property"),
             ("ultimus", "ANP Ultimus", "property"),
-
-            // Companies & Orgs
             ("edcast", "EdCast", "company"),
             ("ed cast", "EdCast", "company"),
             ("cornerstone ondemand", "Cornerstone OnDemand", "company"),
@@ -270,8 +372,6 @@ public final class CorrectionStore {
             ("cgmeetup", "CGMeetUp", "company"),
             ("tcs", "TCS", "company"),
             ("artcraft", "ArtCraft", "company"),
-
-            // AI & Core Tools
             ("llm wiki", "LLM wiki", "tech"),
             ("llm", "LLM", "acronym"),
             ("local flow", "LocalFlow", "tool"),
@@ -298,8 +398,6 @@ public final class CorrectionStore {
             ("reverse engineer anything", "Reverse Engineer Anything", "tool"),
             ("squad review", "squad-review", "tool"),
             ("linkedin style writer", "linkedin-style-writer", "tool"),
-
-            // Architecture & Concepts
             ("model context protocol", "Model Context Protocol", "tech"),
             ("mcp", "MCP", "acronym"),
             ("memex", "Memex", "concept"),
@@ -326,8 +424,6 @@ public final class CorrectionStore {
             ("kubernetes", "Kubernetes", "tech"),
             ("next js", "Next.js", "tech"),
             ("nextjs", "Next.js", "tech"),
-
-            // Apple & Native macOS
             ("macos", "macOS", "tech"),
             ("ios", "iOS", "tech"),
             ("apple silicon", "Apple Silicon", "tech"),
@@ -340,8 +436,6 @@ public final class CorrectionStore {
             ("cgeventtap", "CGEventTap", "tech"),
             ("sf speech recognizer", "SFSpeechRecognizer", "tech"),
             ("sfspeechrecognizer", "SFSpeechRecognizer", "tech"),
-
-            // Indian Finance, Government & Life
             ("upi", "UPI", "acronym"),
             ("aadhaar", "Aadhaar", "name"),
             ("aadhar", "Aadhaar", "name"),
@@ -354,8 +448,6 @@ public final class CorrectionStore {
             ("clearyourdoubt", "clearyourdoubt.in", "website"),
             ("hyundai i20", "Hyundai i20", "vehicle"),
             ("i20", "Hyundai i20", "vehicle"),
-
-            // Acoustic Misrecognitions (Speech Fixes)
             ("earliest scale", "earlier skill", "speech_fix"),
             ("earlier scale", "earlier skill", "speech_fix"),
             ("netherland", "LLM wiki", "speech_fix"),
@@ -394,6 +486,88 @@ public final class CorrectionStore {
         return entries
     }
 
+    public func searchHistory(query: String, limit: Int = 100) -> [HistoryEntry] {
+        let q = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        if q.isEmpty { return getAllHistory(limit: limit) }
+
+        let sql = "SELECT id, raw_transcript, polished_text, app_name, created_at FROM dictation_history WHERE polished_text LIKE ? OR raw_transcript LIKE ? OR app_name LIKE ? ORDER BY id DESC LIMIT ?;"
+        var stmt: OpaquePointer?
+        var entries: [HistoryEntry] = []
+
+        if sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK {
+            let wildcard = "%\(q)%"
+            let SQLITE_TRANSIENT = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
+            sqlite3_bind_text(stmt, 1, wildcard, -1, SQLITE_TRANSIENT)
+            sqlite3_bind_text(stmt, 2, wildcard, -1, SQLITE_TRANSIENT)
+            sqlite3_bind_text(stmt, 3, wildcard, -1, SQLITE_TRANSIENT)
+            sqlite3_bind_int(stmt, 4, Int32(limit))
+
+            while sqlite3_step(stmt) == SQLITE_ROW {
+                let id = sqlite3_column_int64(stmt, 0)
+                let raw = String(cString: sqlite3_column_text(stmt, 1))
+                let pol = String(cString: sqlite3_column_text(stmt, 2))
+                let app = sqlite3_column_text(stmt, 3).map { String(cString: $0) } ?? "Unknown"
+                let date = Date(timeIntervalSince1970: sqlite3_column_double(stmt, 4))
+
+                entries.append(HistoryEntry(id: id, rawTranscript: raw, polishedText: pol, appName: app, timestamp: date))
+            }
+        }
+        sqlite3_finalize(stmt)
+        return entries
+    }
+
+    public func getHistoryStats() -> (totalCount: Int, totalWords: Int) {
+        let sql = "SELECT raw_transcript, polished_text FROM dictation_history;"
+        var stmt: OpaquePointer?
+        var count = 0
+        var totalWords = 0
+
+        if sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK {
+            while sqlite3_step(stmt) == SQLITE_ROW {
+                count += 1
+                let text = String(cString: sqlite3_column_text(stmt, 1))
+                let words = text.components(separatedBy: .whitespacesAndNewlines).filter { !$0.isEmpty }
+                totalWords += words.count
+            }
+        }
+        sqlite3_finalize(stmt)
+        return (count, totalWords)
+    }
+
+    public func exportHistoryJSON() -> String {
+        let entries = getAllHistory(limit: 1000)
+        var array: [[String: Any]] = []
+        let formatter = ISO8601DateFormatter()
+        for e in entries {
+            array.append([
+                "id": e.id,
+                "raw_transcript": e.rawTranscript,
+                "polished_text": e.polishedText,
+                "app_name": e.appName,
+                "timestamp": formatter.string(from: e.timestamp)
+            ])
+        }
+        if let data = try? JSONSerialization.data(withJSONObject: array, options: [.prettyPrinted]),
+           let str = String(data: data, encoding: .utf8) {
+            return str
+        }
+        return "[]"
+    }
+
+    public func exportHistoryCSV() -> String {
+        let entries = getAllHistory(limit: 1000)
+        var csv = "ID,Timestamp,AppName,RawTranscript,PolishedText\n"
+        let formatter = ISO8601DateFormatter()
+        for e in entries {
+            let app = e.appName.replacingOccurrences(of: "\"", with: "\"\"")
+            let raw = e.rawTranscript.replacingOccurrences(of: "\"", with: "\"\"")
+            let pol = e.polishedText.replacingOccurrences(of: "\"", with: "\"\"")
+            let time = formatter.string(from: e.timestamp)
+            csv += "\(e.id),\"\(time)\",\"\(app)\",\"\(raw)\",\"\(pol)\"\n"
+        }
+        return csv
+    }
+
     public func deleteHistory(id: Int64) {
         let sql = "DELETE FROM dictation_history WHERE id = ?;"
         var stmt: OpaquePointer?
@@ -402,5 +576,9 @@ public final class CorrectionStore {
             sqlite3_step(stmt)
         }
         sqlite3_finalize(stmt)
+    }
+
+    public func clearAllHistory() {
+        executeSQL("DELETE FROM dictation_history;")
     }
 }

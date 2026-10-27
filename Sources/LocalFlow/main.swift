@@ -1,5 +1,6 @@
 import Cocoa
 import Speech
+import LocalFlowCore
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem!
@@ -9,6 +10,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let configManager = ConfigManager.shared
     private let correctionStore = CorrectionStore.shared
     private let soundFeedback = SoundFeedback.shared
+    private let hapticFeedback = HapticFeedback.shared
 
     private var isRecording = false
     private var targetApp: NSRunningApplication?
@@ -22,7 +24,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self?.buildMenu()
         }
 
-        print("LocalFlow started. Press Control twice to start, once to end.")
+        print("LocalFlow started successfully.")
     }
 
     private func setupStatusItem() {
@@ -38,13 +40,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func buildMenu() {
         let config = configManager.config
         let menu = NSMenu()
-        menu.addItem(NSMenuItem(title: "Toggle Dictation (Ctrl twice / Ctrl once)", action: #selector(toggleDictation), keyEquivalent: ""))
+
+        let shortcutDesc: String
+        if config.hotkey_mode == .toggle {
+            shortcutDesc = "Toggle Dictation (Double-tap \(config.trigger_key.displayName))"
+        } else {
+            shortcutDesc = "Push-to-Talk (Hold \(config.trigger_key.displayName))"
+        }
+
+        menu.addItem(NSMenuItem(title: shortcutDesc, action: #selector(toggleDictation), keyEquivalent: ""))
         menu.addItem(NSMenuItem.separator())
-        menu.addItem(NSMenuItem(title: "Settings & Vocabulary...", action: #selector(openSettingsWindow), keyEquivalent: ","))
+        menu.addItem(NSMenuItem(title: "Settings & Preferences...", action: #selector(openSettingsWindow), keyEquivalent: ","))
         menu.addItem(NSMenuItem(title: "Mode: \(config.headless ? "Headless (Zero UI)" : "Floating Pill HUD")", action: #selector(toggleHeadlessMode), keyEquivalent: ""))
         menu.addItem(NSMenuItem.separator())
         menu.addItem(NSMenuItem(title: "Open Config Folder (~/.config/localflow)", action: #selector(openConfigFolder), keyEquivalent: "o"))
-        menu.addItem(NSMenuItem(title: "Check Permissions", action: #selector(checkPermissions), keyEquivalent: ""))
+        menu.addItem(NSMenuItem(title: "Check System Permissions", action: #selector(checkPermissions), keyEquivalent: ""))
+        menu.addItem(NSMenuItem.separator())
         menu.addItem(NSMenuItem(title: "Quit LocalFlow", action: #selector(quitApp), keyEquivalent: "q"))
         statusItem.menu = menu
     }
@@ -60,11 +71,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self.pill.updateState(.listening, partialText: partial)
             }
         }
+
         speechManager.onAudioLevel = { [weak self] level in
             guard let self = self else { return }
             if !self.configManager.config.headless {
                 self.pill.updateAudioLevel(level)
             }
+        }
+
+        speechManager.onError = { [weak self] errorMsg in
+            guard let self = self else { return }
+            print("SpeechManager error: \(errorMsg)")
+            self.soundFeedback.playError()
+            self.hapticFeedback.trigger(.error)
+            if !self.configManager.config.headless {
+                self.pill.updateState(.error, partialText: errorMsg)
+                self.pill.hidePill(delay: 2.0)
+            }
+            self.isRecording = false
+            self.hotkeyManager.isRecording = false
         }
     }
 
@@ -88,7 +113,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func startDictation() {
         guard !isRecording else { return }
-        
+
         // Capture active application before taking focus
         self.targetApp = NSWorkspace.shared.frontmostApplication
 
@@ -96,6 +121,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             guard let self = self else { return }
             guard granted else {
                 print("Microphone or Speech Recognition permission not granted.")
+                self.soundFeedback.playError()
+                self.hapticFeedback.trigger(.error)
+                if !self.configManager.config.headless {
+                    self.pill.showPill()
+                    self.pill.updateState(.error, partialText: "Mic or Speech permission denied.")
+                    self.pill.hidePill(delay: 2.5)
+                }
                 return
             }
 
@@ -103,6 +135,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self.hotkeyManager.isRecording = true
 
             self.soundFeedback.playStart()
+            self.hapticFeedback.trigger(.start)
 
             if !self.configManager.config.headless {
                 self.pill.showPill()
@@ -115,9 +148,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     print("Recording started...")
                 case .failure(let error):
                     print("Failed to start recording: \(error.localizedDescription)")
+                    self.soundFeedback.playError()
+                    self.hapticFeedback.trigger(.error)
                     self.isRecording = false
                     self.hotkeyManager.isRecording = false
-                    self.pill.hidePill()
+                    if !self.configManager.config.headless {
+                        self.pill.updateState(.error, partialText: error.localizedDescription)
+                        self.pill.hidePill(delay: 2.0)
+                    }
                 }
             }
         }
@@ -129,6 +167,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         hotkeyManager.isRecording = false
 
         soundFeedback.playStop()
+        hapticFeedback.trigger(.stop)
 
         if !configManager.config.headless {
             pill.updateState(.processing, partialText: "Transcribing...")
@@ -148,7 +187,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let appStyle = self.configManager.config.styleForApp(bundleId: bundleId)
             print("Direct Transcript: \"\(trimmed)\" (App: \(appName), Style: \(appStyle))")
 
-            // 1. Instant deterministic pipeline (vocabulary, fillers, self-corrections, numbers, lists, newlines)
+            // 1. Instant deterministic pipeline
             let formatted = TextPolisher.shared.polish(
                 text: trimmed,
                 style: appStyle,
@@ -159,7 +198,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self.pill.updateState(.processing, partialText: "Polishing with Ollama...")
             }
 
-            // 2. High-speed local LLM grammar and factual correction (Qwen 2.5 Coder 1.5B)
+            // 2. High-speed local LLM grammar and factual correction
             OllamaClient.shared.refineTranscript(formatted) { [weak self] polished in
                 guard let self = self else { return }
 
@@ -188,6 +227,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func toggleHeadlessMode() {
         configManager.config.headless.toggle()
+        configManager.save()
         buildMenu()
     }
 

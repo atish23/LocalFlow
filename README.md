@@ -1,32 +1,145 @@
 # LocalFlow
 
-A lightweight, 100% offline, native macOS voice dictation app inspired by Wispr Flow with personal style learning and zero-UI headless support.
+[![CI](https://github.com/atish23/LocalFlow/actions/workflows/build-and-test.yml/badge.svg)](https://github.com/atish23/LocalFlow/actions/workflows/build-and-test.yml)
+[![Platform](https://img.shields.io/badge/Platform-macOS%2013%2B-blue.svg)](https://www.apple.com/macos/)
+[![Architecture](https://img.shields.io/badge/Architecture-Apple%20Silicon%20%7C%20Intel-green.svg)](#)
+[![Swift](https://img.shields.io/badge/Swift-5.9%2B-orange.svg)](https://swift.org)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Ollama](https://img.shields.io/badge/Local%20LLM-Ollama-black.svg)](https://ollama.ai)
 
-## Key Capabilities
-
-- **On-Device Speech-to-Text**: Built on macOS `SFSpeechRecognizer` running directly on Apple Neural Engine (ANE). 100% private and offline.
-- **Personalized AI Autocorrect**: Connects to local [Ollama](http://localhost:11434) (`qwen2.5-coder:1.5b` or `llama3.2:1b`) to remove filler words (*"um"*, *"uh"*, *"like"*), fix punctuation, and format numbers/dates.
-- **Personal Dictionary**: Add custom names, jargon, or acronyms to `config.json` so the AI always uses your preferred spellings.
-- **Custom Tags Expansion**: Define tags (like `:email`, `:standup`, `:gh`) that automatically expand into full phrases.
-- **Personal Writing Style Learning**:
-  - Add your writing/chat samples to `~/.config/localflow/my_style.txt` so the AI matches your natural voice.
-  - Automatically records dictation history in a local SQLite database (`~/.config/localflow/history.db`).
-- **Zero-UI Headless Mode**: Toggle headless mode to hide the floating pill and rely purely on subtle audio cues (*Tink* on start, *Pop* on end).
-- **Global Control Shortcut**:
-  - Press **Control twice** (`Ctrl Ctrl` within 400ms) to **start** dictating.
-  - Press **Control once** (`Ctrl`) while recording to **stop and paste**.
+LocalFlow is a fast, 100% offline, native macOS voice dictation application built for builders, developers, and privacy-conscious professionals. It replaces cloud-based dictation tools (such as Wispr Flow) with a private, zero-subscription, local pipeline that runs directly on your machine.
 
 ---
 
-## Configuration (`~/.config/localflow/config.json`)
+## Key Highlights
 
-The config file is automatically created on first launch with live file watching (edits take effect immediately):
+- **100% Private & On-Device**: Built on Apple Speech Framework (`SFSpeechRecognizer`) executing directly on the Apple Neural Engine (ANE). Your audio never leaves your computer.
+- **Push-to-Talk & Double-Tap Modes**: Choose between Hold-to-Talk (press and hold key while speaking, release to paste) or Double-Tap Toggle (double-tap key to start, single-tap to finish).
+- **Customizable Global Hotkeys**: Bind dictation triggers to Control (⌃), Option (⌥), Command (⌘), Shift (⇧), or Function/Globe (fn).
+- **Tactile Trackpad Haptics & Audio Cues**: Experience subtle physical click feedback via `NSHapticFeedbackManager` on start, stop, and paste, alongside gentle audio cues.
+- **High-Speed Local LLM Cleanup**: Connects to local [Ollama](https://ollama.ai) (`qwen2.5-coder:1.5b` or `llama3.2:1b`) to refine grammar, fix spelling, and remove duplicate stutter loops in under 500ms.
+- **Resilient Deterministic Fallback**: If Ollama is offline or times out (>2.5s), LocalFlow immediately falls back to its deterministic regex pipeline. Your workflow is never blocked.
+- **Custom Vocabulary & Phonetic Auto-Correct**: Pre-seeded with developer jargon, Indian names, finance terms, and tools. Add words through the UI or SQLite store (`~/.config/localflow/history.db`).
+- **App-Aware Formatting**: Automatically tailors style to the active application:
+  - **Code editors & terminals** (VS Code, Terminal): clean raw tokens without corporate filler.
+  - **Email** (Apple Mail): formal capitalization and complete sentences.
+  - **Chat** (Slack, Messages, Signal): natural, conversational phrasing.
+- **Live RMS Waveform HUD & Zero-UI Headless Mode**: Floating glass pill displays real-time audio waveforms, or toggle Headless Mode for zero visual distraction.
+- **Comprehensive SwiftUI Settings Window**: Manage audio devices, hotkeys, LLM models, vocabulary, and search/export history directly from the macOS Menu Bar.
+
+---
+
+## Architecture
+
+```
+                    +-----------------------------+
+                    |    Microphone Audio Input   |
+                    +--------------+--------------+
+                                   |
+                                   v
+             +-------------------------------------------+
+             |   Apple Neural Engine (ANE) Speech STT    |
+             |       (SFSpeechRecognizer On-Device)      |
+             +---------------------+---------------------+
+                                   | Raw Transcript
+                                   v
+             +-------------------------------------------+
+             |   Step 1: Deterministic Text Polisher     |
+             |  - Filler words removal (um, uh, er, ah)  |
+             |  - Mid-sentence self-correction resolver  |
+             |  - Custom tags expansion (:standup, :gh)  |
+             |  - Phonetic SQLite vocabulary mapping     |
+             |  - Currency, fiscal years, lists format   |
+             +---------------------+---------------------+
+                                   | Formatted Text
+                                   v
+             +-------------------------------------------+
+             |   Step 2: Local LLM Grammar Refinement    |
+             |        (Ollama: Qwen 2.5 Coder 1.5B)      |
+             |    * Instant 2.5s fallback to Step 1 *    |
+             +---------------------+---------------------+
+                                   | Polished Text
+                                   v
+             +-------------------------------------------+
+             |   Step 3: Multi-Clause Loop Deduplication |
+             |  (Eliminates pause stutter repetitions)   |
+             +---------------------+---------------------+
+                                   |
+                  +----------------+----------------+
+                  |                                 |
+                  v                                 v
+     +--------------------------+     +--------------------------+
+     |   SQLite History Store   |     |   CGEvent HID Injection  |
+     | (~/.config/localflow/db) |     | (Cmd+V into Frontmost)   |
+     +--------------------------+     +--------------------------+
+```
+
+---
+
+## Keyboard Shortcuts & Dictation Modes
+
+Configure your preferred mode anytime via **Menu Bar > Settings & Preferences > General**:
+
+| Mode | Trigger Key | Start Action | Stop & Paste Action |
+| :--- | :--- | :--- | :--- |
+| **Double-Tap Toggle** *(Default)* | Control (⌃) | Tap key twice within 400ms | Tap key once |
+| **Hold-to-Talk (Push-to-Talk)** | Control (⌃) | Press and hold key down | Release key |
+| **Custom Trigger Keys** | Option (⌥), Command (⌘), Shift (⇧), Function (fn) | Configurable | Configurable |
+
+---
+
+## Quick Start & Installation
+
+### Option 1: Install Pre-Built DMG
+
+1. Download the latest `LocalFlow-1.0.0.dmg` from the [Releases](https://github.com/atish23/LocalFlow/releases) page.
+2. Open the DMG and drag **LocalFlow.app** into your **Applications** folder.
+3. Launch LocalFlow from Applications.
+4. When prompted, grant **Microphone**, **Speech Recognition**, and **Accessibility** permissions.
+
+### Option 2: Build from Source
+
+#### Prerequisites
+- macOS 13.0 or higher
+- Swift 5.9+ / Xcode Command Line Tools: `xcode-select --install`
+- [Ollama](https://ollama.ai) (for local LLM cleanup):
+  ```bash
+  ollama run qwen2.5-coder:1.5b
+  ```
+
+#### Clone and Build
+```bash
+git clone https://github.com/atish23/LocalFlow.git
+cd LocalFlow
+
+# Run comprehensive test suite
+swift test
+
+# Build in release mode
+swift build -c release
+
+# Package standalone application bundle and DMG
+./package.sh --dmg
+
+# Or deploy directly to /Applications with persistent signing
+./deploy.sh
+```
+
+---
+
+## Configuration Reference
+
+LocalFlow stores its configuration in `~/.config/localflow/config.json`. Changes can be made in the Settings UI or directly in the file (live-reloaded automatically):
 
 ```json
 {
   "double_tap_threshold_ms": 400,
+  "haptic_feedback": true,
   "headless": false,
+  "hotkey_mode": "toggle",
   "llm_model": "qwen2.5-coder:1.5b",
+  "llm_temperature": 0.0,
+  "llm_url": "http://127.0.0.1:11434",
   "personal_dictionary": [
     "LocalFlow",
     "Wispr",
@@ -39,31 +152,60 @@ The config file is automatically created on first launch with live file watching
   "tags": {
     ":email": "my.email@domain.com",
     ":standup": "Today I am focusing on"
-  }
+  },
+  "trigger_key": "control"
 }
+```
+
+### Configuration Options
+
+- `hotkey_mode`: `"toggle"` for double-tap toggle or `"push_to_talk"` for hold-to-talk.
+- `trigger_key`: `"control"`, `"option"`, `"command"`, `"shift"`, or `"function"`.
+- `double_tap_threshold_ms`: Duration (in milliseconds) within which two taps trigger dictation (default: `400`).
+- `haptic_feedback`: Enables or disables Force Touch trackpad feedback (default: `true`).
+- `sound_effects`: Enables or disables audio feedback chimes (default: `true`).
+- `headless`: When `true`, hides the floating pill HUD and relies entirely on audio/haptic cues (default: `false`).
+- `llm_url`: Base URL of your local Ollama server (default: `"http://127.0.0.1:11434"`).
+- `llm_model`: Local model tag to use for refinement (default: `"qwen2.5-coder:1.5b"`).
+- `tags`: Key-value map of shorthand phrases that expand automatically upon dictation.
+
+---
+
+## System Permissions Guide
+
+LocalFlow requires three macOS permissions to operate properly:
+
+1. **Microphone Access**: Captures live audio input for speech recognition.
+   - *System Settings > Privacy & Security > Microphone > LocalFlow*
+2. **Speech Recognition**: Enables Apple Neural Engine acoustic transcription.
+   - *System Settings > Privacy & Security > Speech Recognition > LocalFlow*
+3. **Accessibility**: Simulates paste keyboard events (`Cmd+V`) via HID tap to insert your dictated text into target applications.
+   - *System Settings > Privacy & Security > Accessibility > LocalFlow*
+
+You can verify and request all permissions at any time via **Menu Bar > Check System Permissions** or through the **Audio Input** tab in Settings.
+
+---
+
+## Packaging & Release Tooling
+
+- `./package.sh`: Compiles in release mode and packages `LocalFlow.app` with icons and entitlements.
+- `./package.sh --dmg`: Compiles, packages, and builds a distribution disk image at `build/LocalFlow-1.0.0.dmg`.
+- `./deploy.sh`: Rebuilds, deploys to `/Applications/LocalFlow.app` with persistent development signing, and restarts the app.
+- `./scripts/create_dmg.sh`: Standalone script to create compressed DMG with `/Applications` drag-and-drop link.
+- `./scripts/notarize.sh`: Apple Notary Service submission and ticket stapling script.
+
+---
+
+## Running Unit Tests
+
+LocalFlow includes automated unit tests covering regex polishing, SQLite persistence, vocabulary import/export, and configuration decoding:
+
+```bash
+swift test
 ```
 
 ---
 
-## How to Run
+## License
 
-1. Ensure Ollama is running in your terminal:
-   ```bash
-   ollama run qwen2.5-coder:1.5b
-   ```
-
-2. Launch `LocalFlow.app`:
-   ```bash
-   open "/Applications/LocalFlow.app"
-   ```
-
-3. A microphone icon will appear in your macOS Menu Bar.
-4. From the menu bar, you can click **"Open Config Folder"** to edit your dictionary or style samples anytime.
-5. In any app, press **`Ctrl Ctrl`**, speak, and press **`Ctrl`** once to paste your polished words!
-
-## Rebuilding
-
-To recompile and package:
-```bash
-./package.sh
-```
+This project is licensed under the [MIT License](LICENSE).

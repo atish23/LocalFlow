@@ -2,9 +2,57 @@ import Foundation
 
 public final class OllamaClient {
     public static let shared = OllamaClient()
-    private let baseURL = URL(string: "http://127.0.0.1:11434")!
-    
+
     private init() {}
+
+    private var baseURL: URL {
+        let configured = ConfigManager.shared.config.llm_url.trimmingCharacters(in: .whitespacesAndNewlines)
+        if configured.isEmpty {
+            return URL(string: "http://127.0.0.1:11434")!
+        }
+        let sanitized = configured.hasSuffix("/") ? String(configured.dropLast()) : configured
+        return URL(string: sanitized) ?? URL(string: "http://127.0.0.1:11434")!
+    }
+
+    public func testConnection(completion: @escaping (Bool, String) -> Void) {
+        let url = baseURL.appendingPathComponent("/api/tags")
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+        request.timeoutInterval = 3.0
+
+        let task = URLSession.shared.dataTask(with: request) { data, response, error in
+            if let error = error {
+                DispatchQueue.main.async {
+                    completion(false, "Connection error: \(error.localizedDescription)")
+                }
+                return
+            }
+
+            guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200,
+                  let data = data,
+                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let models = json["models"] as? [[String: Any]] else {
+                DispatchQueue.main.async {
+                    completion(false, "Ollama responded with invalid response")
+                }
+                return
+            }
+
+            let configuredModel = ConfigManager.shared.config.llm_model
+            let modelNames = models.compactMap { $0["name"] as? String }
+            let hasModel = modelNames.contains(where: { $0.hasPrefix(configuredModel) || configuredModel.hasPrefix($0) })
+
+            DispatchQueue.main.async {
+                if hasModel {
+                    completion(true, "Connected! Model '\(configuredModel)' is ready.")
+                } else {
+                    let available = modelNames.prefix(3).joined(separator: ", ")
+                    completion(false, "Connected to Ollama, but '\(configuredModel)' not found. Installed: \(available.isEmpty ? "none" : available)")
+                }
+            }
+        }
+        task.resume()
+    }
 
     public func refineTranscript(_ text: String, completion: @escaping (String) -> Void) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -15,8 +63,9 @@ public final class OllamaClient {
 
         let config = ConfigManager.shared.config
         let model = config.llm_model.isEmpty ? "qwen2.5-coder:1.5b" : config.llm_model
+        let temp = config.llm_temperature
 
-        let systemPrompt = """
+        let defaultSystemPrompt = """
         You are an automated speech dictation text cleanup filter. The user dictates text into their computer.
         CRITICAL RULES:
         1. Fix grammar, spelling, punctuation, capitalization, and numbers.
@@ -26,6 +75,10 @@ public final class OllamaClient {
         5. NEVER add explanations, quotes, preambles, or conversational commentary.
         6. Output ONLY the cleaned transcript text.
         """
+
+        let systemPrompt = config.llm_system_prompt?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+            ? config.llm_system_prompt!
+            : defaultSystemPrompt
 
         let messages: [[String: String]] = [
             ["role": "system", "content": systemPrompt],
@@ -51,7 +104,7 @@ public final class OllamaClient {
             "stream": false,
             "keep_alive": "24h",
             "options": [
-                "temperature": 0.0,
+                "temperature": temp,
                 "num_predict": predictTokens
             ]
         ]

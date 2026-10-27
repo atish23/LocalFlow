@@ -5,27 +5,32 @@ APP_NAME="LocalFlow"
 PROJECT_PATH="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DESTINATION="/Applications/${APP_NAME}.app"
 
-echo "🚀 Starting Clean Build & Deploy for ${APP_NAME}..."
+echo "Starting Clean Build and Deploy for ${APP_NAME}..."
 
 # 1. Kill running instances
-echo "🛑 Killing existing instances..."
+echo "Stopping existing instances..."
 pkill -f "${APP_NAME}" 2>/dev/null || true
 sleep 1
 
 # 2. Build in release mode
-echo "🧹 Compiling Swift package..."
+echo "Compiling Swift package in release mode..."
 cd "${PROJECT_PATH}"
 swift build -c release
 
 BIN_PATH="$(find .build -name "LocalFlow" -type f -perm +111 | grep -i "Release" | head -n 1)"
 if [ -z "$BIN_PATH" ]; then
-    BIN_PATH=".build/out/Products/Debug/LocalFlow"
+    echo "Error: Release binary not found."
+    exit 1
 fi
 
 # 3. Assemble temporary staging app bundle
 STAGE_DIR="${PROJECT_PATH}/${APP_NAME}.app"
 mkdir -p "${STAGE_DIR}/Contents/MacOS" "${STAGE_DIR}/Contents/Resources"
 cp "${BIN_PATH}" "${STAGE_DIR}/Contents/MacOS/${APP_NAME}"
+
+if [ -f "${PROJECT_PATH}/Resources/AppIcon.icns" ]; then
+    cp "${PROJECT_PATH}/Resources/AppIcon.icns" "${STAGE_DIR}/Contents/Resources/AppIcon.icns"
+fi
 
 cat << 'EOF' > "${STAGE_DIR}/Contents/Info.plist"
 <?xml version="1.0" encoding="UTF-8"?>
@@ -41,26 +46,34 @@ cat << 'EOF' > "${STAGE_DIR}/Contents/Info.plist"
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
-    <string>1.0</string>
+    <string>1.0.0</string>
+    <key>CFBundleVersion</key>
+    <string>1</string>
+    <key>CFBundleIconFile</key>
+    <string>AppIcon</string>
     <key>LSUIElement</key>
     <true/>
     <key>NSMicrophoneUsageDescription</key>
     <string>LocalFlow requires microphone access for on-device voice dictation.</string>
     <key>NSSpeechRecognitionUsageDescription</key>
     <string>LocalFlow requires speech recognition to transcribe speech locally.</string>
+    <key>SUFeedURL</key>
+    <string>https://raw.githubusercontent.com/atish23/LocalFlow/main/appcast.xml</string>
+    <key>SUEnableAutomaticChecks</key>
+    <true/>
 </dict>
 </plist>
 EOF
 
 # 4. Deploy to /Applications using rsync (preserving inodes for TCC)
-echo "📦 Deploying to ${DESTINATION}..."
+echo "Deploying to ${DESTINATION}..."
 mkdir -p "${DESTINATION}"
 rsync -a --delete "${STAGE_DIR}/" "${DESTINATION}/"
 
 # 5. Sign with stable "LocalFlow Development" certificate (avoids CDHash invalidation on rebuild)
 CERT_NAME="LocalFlow Development"
 if ! security find-identity -v -p codesigning | grep -q "${CERT_NAME}"; then
-    echo "🔑 Setting up persistent code signing certificate (${CERT_NAME})..."
+    echo "Setting up persistent code signing certificate (${CERT_NAME})..."
     CERT_DIR="/tmp/localflow_cert_gen"
     mkdir -p "${CERT_DIR}"
     cat << 'CERTEOF' > "${CERT_DIR}/cert.conf"
@@ -85,11 +98,11 @@ CERTEOF
     rm -rf "${CERT_DIR}"
 fi
 
-echo "🔏 Signing app with persistent identity '${CERT_NAME}' and entitlements..."
+echo "Signing app with persistent identity '${CERT_NAME}' and entitlements..."
 codesign --force --deep --sign "${CERT_NAME}" --entitlements "${PROJECT_PATH}/LocalFlow.entitlements" "${DESTINATION}"
 
 # 6. Launch from /Applications
-echo "🚀 Launching from /Applications..."
+echo "Launching from /Applications..."
 open "${DESTINATION}"
 
-echo "✅ LocalFlow deployed and running from /Applications!"
+echo "LocalFlow deployed and running from /Applications."

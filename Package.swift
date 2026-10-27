@@ -7,12 +7,23 @@ let package = Package(
         .macOS(.v13)
     ],
     products: [
-        .executable(name: "LocalFlow", targets: ["LocalFlow"])
+        .executable(name: "LocalFlow", targets: ["LocalFlow"]),
+        .library(name: "LocalFlowCore", targets: ["LocalFlowCore"])
     ],
     targets: [
+        .target(
+            name: "LocalFlowCore",
+            path: "Sources/LocalFlowCore"
+        ),
         .executableTarget(
             name: "LocalFlow",
+            dependencies: ["LocalFlowCore"],
             path: "Sources/LocalFlow"
+        ),
+        .testTarget(
+            name: "LocalFlowTests",
+            dependencies: ["LocalFlowCore"],
+            path: "Tests/LocalFlowTests"
         )
     ]
 )
