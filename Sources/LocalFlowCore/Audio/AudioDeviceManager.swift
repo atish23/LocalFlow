@@ -2,6 +2,8 @@ import Foundation
 import AVFoundation
 import Speech
 import AppKit
+import CoreAudio
+import AudioToolbox
 
 public struct AudioInputDevice: Identifiable, Hashable {
     public let id: String
@@ -31,8 +33,15 @@ public final class AudioDeviceManager: ObservableObject {
 
     public func refreshDevices() {
         var devices: [AudioInputDevice] = []
+        let deviceTypes: [AVCaptureDevice.DeviceType]
+        if #available(macOS 14.0, *) {
+            deviceTypes = [.microphone, .external]
+        } else {
+            deviceTypes = [.builtInMicrophone, .externalUnknown]
+        }
+
         let discovery = AVCaptureDevice.DiscoverySession(
-            deviceTypes: [.builtInMicrophone, .externalUnknown],
+            deviceTypes: deviceTypes,
             mediaType: .audio,
             position: .unspecified
         )
@@ -49,6 +58,71 @@ public final class AudioDeviceManager: ObservableObject {
         }
 
         self.availableDevices = devices
+    }
+
+    public static func audioDeviceID(from uniqueID: String) -> AudioDeviceID? {
+        var propertyAddress = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyDevices,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        var dataSize: UInt32 = 0
+        let status = AudioObjectGetPropertyDataSize(AudioObjectID(kAudioObjectSystemObject), &propertyAddress, 0, nil, &dataSize)
+        guard status == noErr else { return nil }
+
+        let deviceCount = Int(dataSize) / MemoryLayout<AudioDeviceID>.size
+        var deviceIDs = [AudioDeviceID](repeating: 0, count: deviceCount)
+        let getStatus = AudioObjectGetPropertyData(AudioObjectID(kAudioObjectSystemObject), &propertyAddress, 0, nil, &dataSize, &deviceIDs)
+        guard getStatus == noErr else { return nil }
+
+        for devID in deviceIDs {
+            var uidAddress = AudioObjectPropertyAddress(
+                mSelector: kAudioDevicePropertyDeviceUID,
+                mScope: kAudioObjectPropertyScopeGlobal,
+                mElement: kAudioObjectPropertyElementMain
+            )
+            var uidString: CFString = "" as CFString
+            var uidSize = UInt32(MemoryLayout<CFString>.size)
+            let uidStatus = withUnsafeMutablePointer(to: &uidString) { ptr in
+                AudioObjectGetPropertyData(devID, &uidAddress, 0, nil, &uidSize, ptr)
+            }
+            if uidStatus == noErr {
+                if (uidString as String) == uniqueID {
+                    return devID
+                }
+            }
+        }
+        return nil
+    }
+
+    @discardableResult
+    public static func configureInputDevice(selectedID: String?, for engine: AVAudioEngine) -> Bool {
+        guard let id = selectedID, id != "default", !id.isEmpty else { return false }
+        guard let devID = audioDeviceID(from: id) else {
+            print("AudioDeviceManager: Could not resolve AudioDeviceID for UID '\(id)'")
+            return false
+        }
+        guard let audioUnit = engine.inputNode.audioUnit else {
+            print("AudioDeviceManager: AVAudioEngine inputNode has no audioUnit")
+            return false
+        }
+
+        var targetID = devID
+        let status = AudioUnitSetProperty(
+            audioUnit,
+            kAudioOutputUnitProperty_CurrentDevice,
+            kAudioUnitScope_Global,
+            0,
+            &targetID,
+            UInt32(MemoryLayout<AudioDeviceID>.size)
+        )
+        if status == noErr {
+            print("AudioDeviceManager: Input device routed to '\(id)' (DeviceID: \(targetID))")
+            return true
+        } else {
+            print("AudioDeviceManager: AudioUnitSetProperty error: \(status)")
+            return false
+        }
     }
 
     public static func microphonePermissionStatus() -> AVAuthorizationStatus {
@@ -75,6 +149,10 @@ public final class AudioDeviceManager: ObservableObject {
     public func startMicTest() {
         guard !isMicTesting else { return }
         let engine = AVAudioEngine()
+        AudioDeviceManager.configureInputDevice(
+            selectedID: ConfigManager.shared.config.selected_audio_device_id,
+            for: engine
+        )
         let inputNode = engine.inputNode
         let format = inputNode.outputFormat(forBus: 0)
 

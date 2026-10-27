@@ -154,6 +154,9 @@ public struct GeneralSettingsView: View {
             }
         }
         .padding()
+        .onAppear {
+            config = ConfigManager.shared.config
+        }
     }
 
     private func save() {
@@ -292,6 +295,7 @@ public struct AudioInputSettingsView: View {
     }
 
     private func checkStatus() {
+        selectedDeviceID = ConfigManager.shared.config.selected_audio_device_id ?? "default"
         micAuthorized = (AudioDeviceManager.microphonePermissionStatus() == .authorized)
         speechAuthorized = (AudioDeviceManager.speechRecognitionPermissionStatus() == .authorized)
         accessibilityTrusted = TextPaster.isAccessibilityTrusted()
@@ -383,6 +387,9 @@ public struct LLMSettingsView: View {
             }
         }
         .padding()
+        .onAppear {
+            config = ConfigManager.shared.config
+        }
     }
 
     private func save() {
@@ -452,6 +459,21 @@ public struct VocabularyView: View {
                     NSPasteboard.general.setString(json, forType: .string)
                     exportMessage = "Copied JSON to clipboard!"
                     DispatchQueue.main.asyncAfter(deadline: .now() + 2) { exportMessage = nil }
+                }
+
+                Button("Import CSV") {
+                    if let text = NSPasteboard.general.string(forType: .string), !text.isEmpty {
+                        let count = CorrectionStore.shared.importVocabulary(fromCSV: text)
+                        if count > 0 {
+                            loadVocabulary()
+                            exportMessage = "Imported \(count) entries from clipboard CSV!"
+                        } else {
+                            exportMessage = "No valid CSV rows found on clipboard (format: TriggerPhrase,Replacement...)"
+                        }
+                    } else {
+                        exportMessage = "Clipboard is empty. Copy CSV text first."
+                    }
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) { exportMessage = nil }
                 }
             }
 
@@ -557,6 +579,7 @@ public struct HistoryView: View {
     @State private var totalWords = 0
     @State private var showClearAlert = false
     @State private var exportMessage: String?
+    @State private var copiedEntryId: Int64?
 
     public init() {}
 
@@ -639,9 +662,16 @@ public struct HistoryView: View {
                             Button {
                                 NSPasteboard.general.clearContents()
                                 NSPasteboard.general.setString(entry.polishedText, forType: .string)
+                                copiedEntryId = entry.id
+                                DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                                    if copiedEntryId == entry.id {
+                                        copiedEntryId = nil
+                                    }
+                                }
                             } label: {
-                                Image(systemName: "doc.on.doc")
+                                Image(systemName: copiedEntryId == entry.id ? "checkmark" : "doc.on.doc")
                                     .font(.caption)
+                                    .foregroundColor(copiedEntryId == entry.id ? .green : .primary)
                             }
                             .buttonStyle(BorderlessButtonStyle())
                             .help("Copy to clipboard")

@@ -53,14 +53,30 @@ public final class TextPaster {
         let source = CGEventSource(stateID: .hidSystemState)
         let cmdKeyCode: CGKeyCode = 55 // kVK_Command
         let vKeyCode: CGKeyCode = 9    // kVK_ANSI_V
-        let ctrlKeyCode: CGKeyCode = 59 // kVK_Control
 
-        // Release any lingering Control modifier state from the hotkey tap
-        if let ctrlUp = CGEvent(keyboardEventSource: source, virtualKey: ctrlKeyCode, keyDown: false) {
-            ctrlUp.flags = []
-            ctrlUp.post(tap: .cghidEventTap)
-            usleep(15_000)
+        // Release any lingering modifier key state matching the user's configured trigger key
+        let triggerKey = ConfigManager.shared.config.trigger_key
+        let keyCodesToRelease: [CGKeyCode]
+        switch triggerKey {
+        case .control:
+            keyCodesToRelease = [59, 62]
+        case .option:
+            keyCodesToRelease = [58, 61]
+        case .command:
+            keyCodesToRelease = [54]
+        case .shift:
+            keyCodesToRelease = [56, 60]
+        case .function:
+            keyCodesToRelease = [63]
         }
+
+        for kc in keyCodesToRelease {
+            if let keyUp = CGEvent(keyboardEventSource: source, virtualKey: kc, keyDown: false) {
+                keyUp.flags = []
+                keyUp.post(tap: .cghidEventTap)
+            }
+        }
+        usleep(15_000)
 
         guard let cmdDown = CGEvent(keyboardEventSource: source, virtualKey: cmdKeyCode, keyDown: true),
               let vDown = CGEvent(keyboardEventSource: source, virtualKey: vKeyCode, keyDown: true),

@@ -76,6 +76,7 @@ public final class FloatingPillPanel: NSPanel {
     private let waveformView = AudioWaveformView(frame: NSRect(x: 14, y: 11, width: 24, height: 24))
     private let statusLabel = NSTextField(labelWithString: "Listening...")
     private let transcriptLabel = NSTextField(labelWithString: "")
+    private var hideWorkItem: DispatchWorkItem?
 
     public init() {
         let width: CGFloat = 360
@@ -172,6 +173,9 @@ public final class FloatingPillPanel: NSPanel {
 
     public func showPill() {
         DispatchQueue.main.async {
+            self.hideWorkItem?.cancel()
+            self.hideWorkItem = nil
+
             if let screen = NSScreen.main {
                 let screenRect = screen.visibleFrame
                 let width = self.frame.width
@@ -190,13 +194,20 @@ public final class FloatingPillPanel: NSPanel {
     }
 
     public func hidePill(delay: Double = 0.0) {
-        DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
-            NSAnimationContext.runAnimationGroup({ context in
-                context.duration = 0.18
-                self.animator().alphaValue = 0.0
-            }, completionHandler: {
-                self.orderOut(nil)
-            })
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self else { return }
+            self.hideWorkItem?.cancel()
+            let workItem = DispatchWorkItem { [weak self] in
+                guard let self = self else { return }
+                NSAnimationContext.runAnimationGroup({ context in
+                    context.duration = 0.18
+                    self.animator().alphaValue = 0.0
+                }, completionHandler: {
+                    self.orderOut(nil)
+                })
+            }
+            self.hideWorkItem = workItem
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: workItem)
         }
     }
 }

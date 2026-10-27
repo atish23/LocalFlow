@@ -5,13 +5,22 @@ public final class OllamaClient {
 
     private init() {}
 
-    private var baseURL: URL {
-        let configured = ConfigManager.shared.config.llm_url.trimmingCharacters(in: .whitespacesAndNewlines)
+    public static func sanitizeURL(_ raw: String) -> URL {
+        var configured = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         if configured.isEmpty {
             return URL(string: "http://127.0.0.1:11434")!
         }
-        let sanitized = configured.hasSuffix("/") ? String(configured.dropLast()) : configured
-        return URL(string: sanitized) ?? URL(string: "http://127.0.0.1:11434")!
+        if !configured.hasPrefix("http://") && !configured.hasPrefix("https://") {
+            configured = "http://" + configured
+        }
+        while configured.hasSuffix("/") {
+            configured = String(configured.dropLast())
+        }
+        return URL(string: configured) ?? URL(string: "http://127.0.0.1:11434")!
+    }
+
+    private var baseURL: URL {
+        return Self.sanitizeURL(ConfigManager.shared.config.llm_url)
     }
 
     public func testConnection(completion: @escaping (Bool, String) -> Void) {

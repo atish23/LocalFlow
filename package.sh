@@ -72,6 +72,32 @@ cat << 'EOF' > "$CONTENTS/Info.plist"
 EOF
 
 CERT_NAME="LocalFlow Development"
+if ! security find-identity -v -p codesigning | grep -q "${CERT_NAME}"; then
+    echo "Setting up persistent code signing certificate (${CERT_NAME})..."
+    CERT_DIR="/tmp/localflow_cert_gen_pkg"
+    mkdir -p "${CERT_DIR}"
+    cat << 'CERTEOF' > "${CERT_DIR}/cert.conf"
+[ req ]
+default_bits        = 2048
+distinguished_name  = req_distinguished_name
+prompt              = no
+x509_extensions     = v3_req
+
+[ req_distinguished_name ]
+CN                  = LocalFlow Development
+
+[ v3_req ]
+keyUsage            = critical, digitalSignature
+extendedKeyUsage    = critical, codeSigning
+basicConstraints    = critical, CA:FALSE
+CERTEOF
+    openssl req -x509 -newkey rsa:2048 -nodes -keyout "${CERT_DIR}/dev.key" -out "${CERT_DIR}/dev.crt" -days 3650 -config "${CERT_DIR}/cert.conf" 2>/dev/null || true
+    openssl pkcs12 -export -legacy -inkey "${CERT_DIR}/dev.key" -in "${CERT_DIR}/dev.crt" -out "${CERT_DIR}/dev.p12" -password pass:localflow -name "${CERT_NAME}" 2>/dev/null || true
+    security import "${CERT_DIR}/dev.p12" -k ~/Library/Keychains/login.keychain-db -P localflow -T /usr/bin/codesign -T /usr/bin/security 2>/dev/null || true
+    security add-trusted-cert -d -r trustRoot -k ~/Library/Keychains/login.keychain-db "${CERT_DIR}/dev.crt" 2>/dev/null || true
+    rm -rf "${CERT_DIR}"
+fi
+
 if security find-identity -v -p codesigning | grep -q "${CERT_NAME}"; then
     echo "Signing LocalFlow.app with persistent identity '${CERT_NAME}' and entitlements..."
     codesign --force --deep --sign "${CERT_NAME}" --entitlements "LocalFlow.entitlements" "$APP_DIR"

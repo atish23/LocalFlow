@@ -209,8 +209,10 @@ Thanks!
         guard !isWritingInternally else { return }
         if let data = try? Data(contentsOf: configFileURL),
            let decoded = try? JSONDecoder().decode(LocalFlowConfig.self, from: data) {
-            self.config = decoded
-            print("LocalFlow configuration reloaded.")
+            DispatchQueue.main.async {
+                self.config = decoded
+                print("LocalFlow configuration reloaded.")
+            }
         }
     }
 

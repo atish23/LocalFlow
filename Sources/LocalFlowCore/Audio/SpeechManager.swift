@@ -19,6 +19,8 @@ public final class SpeechManager: NSObject, SFSpeechRecognizerDelegate {
     private var lastVoiceDetectedTime: TimeInterval = 0
     private var stopCompletion: ((String) -> Void)?
     private var interruptionObserver: NSObjectProtocol?
+    private var isCancelling = false
+    private var consecutiveErrorCount = 0
 
     public override init() {
         super.init()
@@ -60,6 +62,15 @@ public final class SpeechManager: NSObject, SFSpeechRecognizerDelegate {
                 audioEngine.stop()
             }
             audioEngine.inputNode.removeTap(onBus: 0)
+
+            AudioDeviceManager.configureInputDevice(
+                selectedID: ConfigManager.shared.config.selected_audio_device_id,
+                for: audioEngine
+            )
+
+            // Recreate recognition request cleanly before reinstalling tap
+            restartRecognitionTask()
+
             let inputNode = audioEngine.inputNode
             let recordingFormat = inputNode.outputFormat(forBus: 0)
             inputNode.installTap(onBus: 0, bufferSize: 1024, format: recordingFormat) { [weak self] buffer, _ in
@@ -68,12 +79,17 @@ public final class SpeechManager: NSObject, SFSpeechRecognizerDelegate {
                 self.dispatchAudioLevelIfNeeded(from: buffer)
             }
             try audioEngine.start()
-            restartRecognitionTask()
         } catch {
             print("SpeechManager: Failed to restart audio engine after route change: \(error.localizedDescription)")
             onError?("Audio input device changed or disconnected.")
             cleanupRecording()
         }
+    }
+
+    public static func hasPermissions() -> Bool {
+        let micGranted = (AudioDeviceManager.microphonePermissionStatus() == .authorized)
+        let speechGranted = (AudioDeviceManager.speechRecognitionPermissionStatus() == .authorized)
+        return micGranted && speechGranted
     }
 
     public static func requestPermissions(completion: @escaping (Bool) -> Void) {
@@ -163,7 +179,15 @@ public final class SpeechManager: NSObject, SFSpeechRecognizerDelegate {
         committedSegments.removeAll()
         currentTaskText = ""
         stopCompletion = nil
+        isCancelling = false
+        consecutiveErrorCount = 0
         lastVoiceDetectedTime = Date().timeIntervalSince1970
+
+        // Configure input device from user preference
+        AudioDeviceManager.configureInputDevice(
+            selectedID: ConfigManager.shared.config.selected_audio_device_id,
+            for: audioEngine
+        )
 
         recognitionRequest = SFSpeechAudioBufferRecognitionRequest()
         guard let recognitionRequest = recognitionRequest else {
@@ -201,8 +225,10 @@ public final class SpeechManager: NSObject, SFSpeechRecognizerDelegate {
 
         recognitionTask = speechRecognizer?.recognitionTask(with: recognitionRequest) { [weak self] result, error in
             guard let self = self else { return }
+            guard !self.isCancelling else { return }
 
             if let result = result {
+                self.consecutiveErrorCount = 0
                 let text = result.bestTranscription.formattedString.trimmingCharacters(in: .whitespacesAndNewlines)
                 self.currentTaskText = text
 
@@ -225,6 +251,22 @@ public final class SpeechManager: NSObject, SFSpeechRecognizerDelegate {
 
             // If task finalized during recording (silence pause or minor error), restart seamlessly
             if self.isRecording && (result?.isFinal == true || error != nil) {
+                if let err = error as NSError? {
+                    // Check if error is intentional cancellation (code 216)
+                    if err.domain == "kAFAssistantErrorDomain" && err.code == 216 {
+                        return
+                    }
+                    self.consecutiveErrorCount += 1
+                    if self.consecutiveErrorCount >= 3 {
+                        print("SpeechManager: Too many consecutive errors (\(self.consecutiveErrorCount)), halting: \(err.localizedDescription)")
+                        DispatchQueue.main.async {
+                            self.onError?("Speech recognition error: \(err.localizedDescription)")
+                        }
+                        self.cleanupRecording()
+                        return
+                    }
+                }
+
                 if !self.currentTaskText.isEmpty {
                     self.commitSegment(self.currentTaskText)
                     self.currentTaskText = ""
@@ -232,7 +274,7 @@ public final class SpeechManager: NSObject, SFSpeechRecognizerDelegate {
 
                 let delay = (error != nil) ? 0.1 : 0.0
                 DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
-                    guard let self = self, self.isRecording else { return }
+                    guard let self = self, self.isRecording, !self.isCancelling else { return }
                     self.restartRecognitionTask()
                 }
             }
@@ -242,8 +284,11 @@ public final class SpeechManager: NSObject, SFSpeechRecognizerDelegate {
     private func restartRecognitionTask() {
         guard isRecording else { return }
 
+        isCancelling = true
+        recognitionRequest?.endAudio()
         recognitionTask?.cancel()
         recognitionTask = nil
+        isCancelling = false
 
         let newRequest = SFSpeechAudioBufferRecognitionRequest()
         configureRecognitionRequest(newRequest)
@@ -341,15 +386,19 @@ public final class SpeechManager: NSObject, SFSpeechRecognizerDelegate {
     }
 
     public func cleanupRecording() {
+        isCancelling = true
         if audioEngine.isRunning {
             audioEngine.stop()
         }
         audioEngine.inputNode.removeTap(onBus: 0)
         audioEngine.reset()
+        recognitionRequest?.endAudio()
         recognitionTask?.cancel()
         recognitionRequest = nil
         recognitionTask = nil
         isRecording = false
+        consecutiveErrorCount = 0
+        isCancelling = false
     }
 
     // SFSpeechRecognizerDelegate

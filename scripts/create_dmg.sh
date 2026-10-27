@@ -28,6 +28,8 @@ echo "Staging application bundle and Applications symlink..."
 cp -R "${APP_BUNDLE}" "${STAGING_DIR}/"
 ln -s /Applications "${STAGING_DIR}/Applications"
 
+hdiutil detach "/Volumes/${APP_NAME}" 2>/dev/null || true
+
 echo "Building compressed disk image..."
 hdiutil create \
     -volname "${APP_NAME}" \

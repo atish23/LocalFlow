@@ -211,4 +211,74 @@ final class LocalFlowTests: XCTestCase {
         manager.refreshDevices()
         XCTAssertFalse(manager.availableDevices.isEmpty, "Should discover at least one audio input device or fallback")
     }
+
+    func testAudioDeviceIDResolution() {
+        // Test system default or nil ID handling
+        let nilDev = AudioDeviceManager.audioDeviceID(from: "non_existent_uid_12345")
+        XCTAssertNil(nilDev, "Unknown device UID should resolve to nil")
+    }
+
+    // MARK: - 5. URL Sanitization Tests
+
+    func testOllamaURLSanitization() {
+        let u1 = OllamaClient.sanitizeURL("127.0.0.1:11434")
+        XCTAssertEqual(u1.absoluteString, "http://127.0.0.1:11434")
+
+        let u2 = OllamaClient.sanitizeURL("http://localhost:11434///")
+        XCTAssertEqual(u2.absoluteString, "http://localhost:11434")
+
+        let u3 = OllamaClient.sanitizeURL("https://custom-ollama.internal:8443")
+        XCTAssertEqual(u3.absoluteString, "https://custom-ollama.internal:8443")
+
+        let u4 = OllamaClient.sanitizeURL("")
+        XCTAssertEqual(u4.absoluteString, "http://127.0.0.1:11434")
+    }
+
+    // MARK: - 6. CSV Parsing with Quoted Commas
+
+    func testCSVLineParsingWithQuotedCommas() {
+        let rawLine = "\"hello, world\",\"hi, there\",\"general\",1"
+        let fields = CorrectionStore.parseCSVLine(rawLine)
+        XCTAssertEqual(fields.count, 4)
+        XCTAssertEqual(fields[0], "hello, world")
+        XCTAssertEqual(fields[1], "hi, there")
+        XCTAssertEqual(fields[2], "general")
+        XCTAssertEqual(fields[3], "1")
+
+        let escapedQuoteLine = "\"phrase with \"\"quotes\"\"\",\"replacement\",\"tech\",5"
+        let fields2 = CorrectionStore.parseCSVLine(escapedQuoteLine)
+        XCTAssertEqual(fields2[0], "phrase with \"quotes\"")
+        XCTAssertEqual(fields2[1], "replacement")
+    }
+
+    func testImportVocabularyWithQuotedCommas() {
+        let store = CorrectionStore(inMemory: true)
+        let csv = """
+        TriggerPhrase,Replacement,Category,UseCount
+        "welcome, user","Welcome User!","greeting",1
+        "simple test","Simple Test","tech",2
+        """
+        let imported = store.importVocabulary(fromCSV: csv)
+        XCTAssertEqual(imported, 2)
+
+        let found = store.searchVocabulary(query: "Welcome User!")
+        XCTAssertEqual(found.count, 1)
+        XCTAssertEqual(found.first?.triggerPhrase, "welcome, user")
+    }
+
+    // MARK: - 7. TextPolisher Edge Cases
+
+    func testPolisherEdgeCases() {
+        let polisher = TextPolisher.shared
+        XCTAssertEqual(polisher.polish(text: ""), "")
+        XCTAssertEqual(polisher.polish(text: "   \n\t  "), "")
+
+        let alreadyClean = "The pull request has been approved and merged."
+        XCTAssertEqual(polisher.polish(text: alreadyClean), alreadyClean)
+    }
+
+    func testPermissionsQuery() {
+        // Verify hasPermissions evaluates without crashing
+        _ = SpeechManager.hasPermissions()
+    }
 }

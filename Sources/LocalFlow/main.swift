@@ -13,6 +13,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let hapticFeedback = HapticFeedback.shared
 
     private var isRecording = false
+    private var isStarting = false
+    private var stopRequestedWhileStarting = false
     private var targetApp: NSRunningApplication?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -89,6 +91,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self.pill.hidePill(delay: 2.0)
             }
             self.isRecording = false
+            self.isStarting = false
+            self.stopRequestedWhileStarting = false
             self.hotkeyManager.isRecording = false
         }
     }
@@ -104,7 +108,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func toggleDictation() {
-        if isRecording {
+        if isRecording || isStarting {
             stopDictation()
         } else {
             startDictation()
@@ -112,58 +116,99 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func startDictation() {
-        guard !isRecording else { return }
+        guard !isRecording && !isStarting else { return }
 
         // Capture active application before taking focus
         self.targetApp = NSWorkspace.shared.frontmostApplication
+        self.isStarting = true
+        self.stopRequestedWhileStarting = false
 
-        SpeechManager.requestPermissions { [weak self] granted in
-            guard let self = self else { return }
-            guard granted else {
-                print("Microphone or Speech Recognition permission not granted.")
-                self.soundFeedback.playError()
-                self.hapticFeedback.trigger(.error)
-                if !self.configManager.config.headless {
-                    self.pill.showPill()
-                    self.pill.updateState(.error, partialText: "Mic or Speech permission denied.")
-                    self.pill.hidePill(delay: 2.5)
-                }
-                return
-            }
-
-            self.isRecording = true
-            self.hotkeyManager.isRecording = true
-
-            self.soundFeedback.playStart()
-            self.hapticFeedback.trigger(.start)
-
-            if !self.configManager.config.headless {
-                self.pill.showPill()
-                self.pill.updateState(.listening, partialText: "")
-            }
-
-            self.speechManager.startRecording { result in
-                switch result {
-                case .success:
-                    print("Recording started...")
-                case .failure(let error):
-                    print("Failed to start recording: \(error.localizedDescription)")
+        if SpeechManager.hasPermissions() {
+            beginRecordingPipeline()
+        } else {
+            SpeechManager.requestPermissions { [weak self] granted in
+                guard let self = self else { return }
+                guard granted else {
+                    print("Microphone or Speech Recognition permission not granted.")
                     self.soundFeedback.playError()
                     self.hapticFeedback.trigger(.error)
-                    self.isRecording = false
-                    self.hotkeyManager.isRecording = false
                     if !self.configManager.config.headless {
-                        self.pill.updateState(.error, partialText: error.localizedDescription)
-                        self.pill.hidePill(delay: 2.0)
+                        self.pill.showPill()
+                        self.pill.updateState(.error, partialText: "Mic or Speech permission denied.")
+                        self.pill.hidePill(delay: 2.5)
                     }
+                    self.isStarting = false
+                    self.stopRequestedWhileStarting = false
+                    return
+                }
+
+                if self.stopRequestedWhileStarting {
+                    print("Dictation cancelled before permissions completed.")
+                    self.isStarting = false
+                    self.stopRequestedWhileStarting = false
+                    return
+                }
+
+                self.beginRecordingPipeline()
+            }
+        }
+    }
+
+    private func beginRecordingPipeline() {
+        if self.stopRequestedWhileStarting {
+            print("Dictation stopped while starting.")
+            self.isStarting = false
+            self.stopRequestedWhileStarting = false
+            return
+        }
+
+        self.isRecording = true
+        self.hotkeyManager.isRecording = true
+
+        self.soundFeedback.playStart()
+        self.hapticFeedback.trigger(.start)
+
+        if !self.configManager.config.headless {
+            self.pill.showPill()
+            self.pill.updateState(.listening, partialText: "")
+        }
+
+        self.speechManager.startRecording { [weak self] result in
+            guard let self = self else { return }
+            self.isStarting = false
+
+            switch result {
+            case .success:
+                print("Recording started...")
+                if self.stopRequestedWhileStarting {
+                    print("Executing deferred stop requested during audio engine startup.")
+                    self.stopRequestedWhileStarting = false
+                    self.stopDictation()
+                }
+            case .failure(let error):
+                print("Failed to start recording: \(error.localizedDescription)")
+                self.soundFeedback.playError()
+                self.hapticFeedback.trigger(.error)
+                self.isRecording = false
+                self.hotkeyManager.isRecording = false
+                self.stopRequestedWhileStarting = false
+                if !self.configManager.config.headless {
+                    self.pill.updateState(.error, partialText: error.localizedDescription)
+                    self.pill.hidePill(delay: 2.0)
                 }
             }
         }
     }
 
     private func stopDictation() {
+        if isStarting {
+            stopRequestedWhileStarting = true
+        }
+
         guard isRecording else { return }
         isRecording = false
+        isStarting = false
+        stopRequestedWhileStarting = false
         hotkeyManager.isRecording = false
 
         soundFeedback.playStop()

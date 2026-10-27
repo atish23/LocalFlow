@@ -312,17 +312,44 @@ public final class CorrectionStore {
         return entries.count
     }
 
+    public static func parseCSVLine(_ line: String) -> [String] {
+        var fields: [String] = []
+        var current = ""
+        var insideQuotes = false
+        var i = line.startIndex
+        while i < line.endIndex {
+            let char = line[i]
+            if char == "\"" {
+                let nextIndex = line.index(after: i)
+                if insideQuotes && nextIndex < line.endIndex && line[nextIndex] == "\"" {
+                    current.append("\"")
+                    i = nextIndex
+                } else {
+                    insideQuotes.toggle()
+                }
+            } else if char == "," && !insideQuotes {
+                fields.append(current)
+                current = ""
+            } else {
+                current.append(char)
+            }
+            i = line.index(after: i)
+        }
+        fields.append(current)
+        return fields.map { $0.trimmingCharacters(in: .whitespaces) }
+    }
+
     public func importVocabulary(fromCSV csvString: String) -> Int {
         let lines = csvString.components(separatedBy: .newlines)
         var count = 0
         for line in lines.dropFirst() {
             let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !trimmed.isEmpty else { continue }
-            let parts = trimmed.components(separatedBy: ",")
+            let parts = Self.parseCSVLine(trimmed)
             if parts.count >= 2 {
-                let trigger = parts[0].trimmingCharacters(in: CharacterSet(charactersIn: "\" "))
-                let repl = parts[1].trimmingCharacters(in: CharacterSet(charactersIn: "\" "))
-                let cat = parts.count >= 3 ? parts[2].trimmingCharacters(in: CharacterSet(charactersIn: "\" ")) : "general"
+                let trigger = parts[0]
+                let repl = parts[1]
+                let cat = parts.count >= 3 && !parts[2].isEmpty ? parts[2] : "general"
                 if !trigger.isEmpty && !repl.isEmpty {
                     saveVocabulary(triggerPhrase: trigger, replacement: repl, category: cat)
                     count += 1
