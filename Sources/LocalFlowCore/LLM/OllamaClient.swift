@@ -147,7 +147,8 @@ public final class OllamaClient {
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = jsonData
-        request.timeoutInterval = 2.5 // Instant 2.5s fallback to deterministic text
+        // Adaptive timeout: 2.5s base for quick dictations, scaled gracefully up to 5.0s for long paragraphs
+        request.timeoutInterval = min(5.0, max(2.5, Double(wordCount) * 0.03 + 2.0))
 
         let task = URLSession.shared.dataTask(with: request) { data, response, error in
             guard let data = data, error == nil,

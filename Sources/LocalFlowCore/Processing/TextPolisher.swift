@@ -90,15 +90,16 @@ public final class TextPolisher {
     // MARK: - 2. Self-Correction Resolver
     public func resolveSelfCorrections(_ text: String) -> String {
         var processed = text
+        // Targeted backtrack patterns:
+        // 1. Single word or short token preceded by a comma before "actually" or "I mean" (e.g., "Monday, actually Tuesday")
+        // 2. Explicit conversational hesitation markers ("wait no", "or rather")
         let backtrackPatterns = [
-            ",?\\s*\\bwait\\s+no\\b\\s*",
-            ",?\\s*\\bactually\\b\\s*",
-            ",?\\s*\\bI\\s+mean\\b\\s*",
-            ",?\\s*\\bor\\s+rather\\b\\s*"
+            "(\\b[a-zA-Z0-9]+)\\s*,\\s*\\b(?:actually|I\\s+mean)\\b\\s*,?\\s*([a-zA-Z0-9]+)",
+            "(\\b[a-zA-Z0-9]+),?\\s*\\b(?:wait\\s+no|or\\s+rather)\\b,?\\s*([a-zA-Z0-9]+)"
         ]
 
         for pattern in backtrackPatterns {
-            if let regex = try? NSRegularExpression(pattern: "([^,.!?]+?)" + pattern + "([^,.!?]+)", options: .caseInsensitive) {
+            if let regex = try? NSRegularExpression(pattern: pattern, options: .caseInsensitive) {
                 let matches = regex.matches(in: processed, options: [], range: NSRange(location: 0, length: processed.utf16.count))
                 for match in matches.reversed() {
                     if let correctionRange = Range(match.range(at: 2), in: processed) {

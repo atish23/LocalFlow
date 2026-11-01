@@ -7,6 +7,7 @@ public final class SpeechManager: NSObject, SFSpeechRecognizerDelegate {
     private var recognitionRequest: SFSpeechAudioBufferRecognitionRequest?
     private var recognitionTask: SFSpeechRecognitionTask?
     private let audioEngine = AVAudioEngine()
+    private var requestLock = os_unfair_lock()
 
     public var onPartialTranscript: ((String) -> Void)?
     public var onAudioLevel: ((Float) -> Void)?
@@ -15,6 +16,8 @@ public final class SpeechManager: NSObject, SFSpeechRecognizerDelegate {
 
     private var committedSegments: [String] = []
     private var currentTaskText: String = ""
+    private var currentTaskId: UUID = UUID()
+    private var rotationTimer: Timer?
     private var lastLevelDispatchTime: TimeInterval = 0
     private var lastVoiceDetectedTime: TimeInterval = 0
     private var stopCompletion: ((String) -> Void)?
@@ -46,7 +49,6 @@ public final class SpeechManager: NSObject, SFSpeechRecognizerDelegate {
         ) { [weak self] _ in
             guard let self = self, self.isRecording else { return }
             print("SpeechManager: Audio engine configuration change detected (device route changed).")
-            // Safely recover recording pipeline without crashing
             self.handleAudioInterruption()
         }
     }
@@ -68,14 +70,16 @@ public final class SpeechManager: NSObject, SFSpeechRecognizerDelegate {
                 for: audioEngine
             )
 
-            // Recreate recognition request cleanly before reinstalling tap
             restartRecognitionTask()
 
             let inputNode = audioEngine.inputNode
             let recordingFormat = inputNode.outputFormat(forBus: 0)
             inputNode.installTap(onBus: 0, bufferSize: 1024, format: recordingFormat) { [weak self] buffer, _ in
                 guard let self = self else { return }
-                self.recognitionRequest?.append(buffer)
+                os_unfair_lock_lock(&self.requestLock)
+                let req = self.recognitionRequest
+                os_unfair_lock_unlock(&self.requestLock)
+                req?.append(buffer)
                 self.dispatchAudioLevelIfNeeded(from: buffer)
             }
             try audioEngine.start()
@@ -103,6 +107,65 @@ public final class SpeechManager: NSObject, SFSpeechRecognizerDelegate {
         }
     }
 
+    // MARK: - Continuity and Boundary Detection
+
+    /// Determines whether incoming transcript text is an ongoing extension or acoustic refinement of the existing utterance,
+    /// or if Apple on-device speech recognition treated a silence pause as an utterance boundary and restarted with new words.
+    public func isUtteranceContinuation(existing: String, incoming: String) -> Bool {
+        let oldTrim = existing.trimmingCharacters(in: .whitespacesAndNewlines)
+        let newTrim = incoming.trimmingCharacters(in: .whitespacesAndNewlines)
+        if oldTrim.isEmpty || newTrim.isEmpty { return true }
+
+        // Direct prefix or extension
+        if newTrim.hasPrefix(oldTrim) || oldTrim.hasPrefix(newTrim) {
+            return true
+        }
+
+        let oldWords = oldTrim.components(separatedBy: .whitespaces).filter { !$0.isEmpty }
+        let newWords = newTrim.components(separatedBy: .whitespaces).filter { !$0.isEmpty }
+
+        var commonPrefixCount = 0
+        for (w1, w2) in zip(oldWords, newWords) {
+            if w1.lowercased() == w2.lowercased() {
+                commonPrefixCount += 1
+            } else {
+                break
+            }
+        }
+
+        let minCount = min(oldWords.count, newWords.count)
+        if commonPrefixCount >= 3 || (commonPrefixCount >= 2 && minCount <= 4) || Double(commonPrefixCount) >= Double(minCount) * 0.4 {
+            return true
+        }
+
+        return false
+    }
+
+    /// Strips acoustic overlap words between the tail of the previous utterance and the head of the incoming utterance.
+    public func stripOverlap(previous: String, next: String) -> String {
+        let prevWords = previous.trimmingCharacters(in: .whitespacesAndNewlines).components(separatedBy: .whitespaces).filter { !$0.isEmpty }
+        let nextWords = next.trimmingCharacters(in: .whitespacesAndNewlines).components(separatedBy: .whitespaces).filter { !$0.isEmpty }
+        guard !prevWords.isEmpty && !nextWords.isEmpty else { return next }
+
+        let maxOverlap = min(prevWords.count, nextWords.count)
+        var overlapLength = 0
+
+        for k in stride(from: maxOverlap, through: 1, by: -1) {
+            let prevSuffix = prevWords.suffix(k).map { $0.lowercased() }
+            let nextPrefix = nextWords.prefix(k).map { $0.lowercased() }
+            if Array(prevSuffix) == Array(nextPrefix) {
+                overlapLength = k
+                break
+            }
+        }
+
+        if overlapLength > 0 {
+            let remaining = nextWords.dropFirst(overlapLength)
+            return remaining.joined(separator: " ")
+        }
+        return next
+    }
+
     public func currentFullTranscript() -> String {
         var segments = committedSegments
         let current = currentTaskText.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -127,7 +190,10 @@ public final class SpeechManager: NSObject, SFSpeechRecognizerDelegate {
                     if commonPrefixCount >= 3 && commonPrefixCount >= min(lastWords.count, currentWords.count) / 2 {
                         segments[segments.count - 1] = current
                     } else {
-                        segments.append(current)
+                        let stripped = stripOverlap(previous: last, next: current).trimmingCharacters(in: .whitespacesAndNewlines)
+                        if !stripped.isEmpty {
+                            segments.append(stripped)
+                        }
                     }
                 }
             } else {
@@ -167,6 +233,15 @@ public final class SpeechManager: NSObject, SFSpeechRecognizerDelegate {
                 committedSegments[committedSegments.count - 1] = trimmed
                 return
             }
+
+            // Case 3: Suffix-prefix boundary overlap
+            let stripped = stripOverlap(previous: last, next: trimmed)
+            let cleanStripped = stripped.trimmingCharacters(in: .whitespacesAndNewlines)
+            if cleanStripped.isEmpty {
+                return
+            }
+            committedSegments.append(cleanStripped)
+            return
         }
 
         committedSegments.append(trimmed)
@@ -189,21 +264,22 @@ public final class SpeechManager: NSObject, SFSpeechRecognizerDelegate {
             for: audioEngine
         )
 
-        recognitionRequest = SFSpeechAudioBufferRecognitionRequest()
-        guard let recognitionRequest = recognitionRequest else {
-            let err = NSError(domain: "LocalFlow", code: -1, userInfo: [NSLocalizedDescriptionKey: "Unable to create recognition request"])
-            completion(.failure(err))
-            return
-        }
+        let initialRequest = SFSpeechAudioBufferRecognitionRequest()
+        configureRecognitionRequest(initialRequest)
 
-        configureRecognitionRequest(recognitionRequest)
+        os_unfair_lock_lock(&requestLock)
+        self.recognitionRequest = initialRequest
+        os_unfair_lock_unlock(&requestLock)
 
         let inputNode = audioEngine.inputNode
         let recordingFormat = inputNode.outputFormat(forBus: 0)
         inputNode.removeTap(onBus: 0)
         inputNode.installTap(onBus: 0, bufferSize: 1024, format: recordingFormat) { [weak self] buffer, _ in
             guard let self = self else { return }
-            self.recognitionRequest?.append(buffer)
+            os_unfair_lock_lock(&self.requestLock)
+            let req = self.recognitionRequest
+            os_unfair_lock_unlock(&self.requestLock)
+            req?.append(buffer)
             self.dispatchAudioLevelIfNeeded(from: buffer)
         }
 
@@ -217,29 +293,66 @@ public final class SpeechManager: NSObject, SFSpeechRecognizerDelegate {
         }
 
         setupRecognitionTask()
+        startRotationTimer()
         completion(.success(()))
     }
 
-    private func setupRecognitionTask() {
-        guard let recognitionRequest = recognitionRequest else { return }
+    private func startRotationTimer() {
+        rotationTimer?.invalidate()
+        // Proactively rotate request before Apple 60s hard ceiling
+        rotationTimer = Timer.scheduledTimer(withTimeInterval: 50.0, repeats: true) { [weak self] _ in
+            guard let self = self, self.isRecording, !self.isCancelling else { return }
+            print("SpeechManager: Proactively rotating recognition task at 50s ceiling.")
+            if !self.currentTaskText.isEmpty {
+                self.commitSegment(self.currentTaskText)
+                self.currentTaskText = ""
+            }
+            self.restartRecognitionTask()
+        }
+    }
 
-        recognitionTask = speechRecognizer?.recognitionTask(with: recognitionRequest) { [weak self] result, error in
+    private func setupRecognitionTask() {
+        os_unfair_lock_lock(&requestLock)
+        guard let activeRequest = recognitionRequest else {
+            os_unfair_lock_unlock(&requestLock)
+            return
+        }
+        os_unfair_lock_unlock(&requestLock)
+
+        let taskId = UUID()
+        self.currentTaskId = taskId
+
+        recognitionTask = speechRecognizer?.recognitionTask(with: activeRequest) { [weak self] result, error in
             guard let self = self else { return }
+            // Ignore callbacks from previous tasks that have been rotated or cancelled
+            guard self.currentTaskId == taskId else { return }
             guard !self.isCancelling else { return }
 
             if let result = result {
                 self.consecutiveErrorCount = 0
                 let text = result.bestTranscription.formattedString.trimmingCharacters(in: .whitespacesAndNewlines)
-                self.currentTaskText = text
+                if !text.isEmpty {
+                    if !self.currentTaskText.isEmpty {
+                        if self.isUtteranceContinuation(existing: self.currentTaskText, incoming: text) {
+                            self.currentTaskText = text
+                        } else {
+                            // Utterance boundary detected after pause. Commit previous text so it is never dropped.
+                            self.commitSegment(self.currentTaskText)
+                            self.currentTaskText = text
+                        }
+                    } else {
+                        self.currentTaskText = text
+                    }
 
-                if result.isFinal {
-                    self.commitSegment(text)
-                    self.currentTaskText = ""
-                }
+                    if result.isFinal {
+                        self.commitSegment(self.currentTaskText)
+                        self.currentTaskText = ""
+                    }
 
-                let full = self.currentFullTranscript()
-                DispatchQueue.main.async {
-                    self.onPartialTranscript?(full)
+                    let full = self.currentFullTranscript()
+                    DispatchQueue.main.async {
+                        self.onPartialTranscript?(full)
+                    }
                 }
             }
 
@@ -249,16 +362,27 @@ public final class SpeechManager: NSObject, SFSpeechRecognizerDelegate {
                 return
             }
 
-            // If task finalized during recording (silence pause or minor error), restart seamlessly
+            // If task finalized during recording (silence pause, 60s limit, or minor error), loop smoothly
             if self.isRecording && (result?.isFinal == true || error != nil) {
+                if !self.currentTaskText.isEmpty {
+                    self.commitSegment(self.currentTaskText)
+                    self.currentTaskText = ""
+                }
+
                 if let err = error as NSError? {
-                    // Check if error is intentional cancellation (code 216)
-                    if err.domain == "kAFAssistantErrorDomain" && err.code == 216 {
+                    // Check if error is normal silence, timeout, retry, or cancellation
+                    if self.isSilenceOrTimeoutError(err) {
+                        // User paused or stayed silent to think. Keep recording alive without incrementing error count.
+                        DispatchQueue.main.async { [weak self] in
+                            guard let self = self, self.isRecording, !self.isCancelling else { return }
+                            self.restartRecognitionTask()
+                        }
                         return
                     }
+
                     self.consecutiveErrorCount += 1
-                    if self.consecutiveErrorCount >= 3 {
-                        print("SpeechManager: Too many consecutive errors (\(self.consecutiveErrorCount)), halting: \(err.localizedDescription)")
+                    if self.consecutiveErrorCount >= 5 {
+                        print("SpeechManager: Too many consecutive hardware/permission errors (\(self.consecutiveErrorCount)), halting: \(err.localizedDescription)")
                         DispatchQueue.main.async {
                             self.onError?("Speech recognition error: \(err.localizedDescription)")
                         }
@@ -267,13 +391,7 @@ public final class SpeechManager: NSObject, SFSpeechRecognizerDelegate {
                     }
                 }
 
-                if !self.currentTaskText.isEmpty {
-                    self.commitSegment(self.currentTaskText)
-                    self.currentTaskText = ""
-                }
-
-                let delay = (error != nil) ? 0.1 : 0.0
-                DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+                DispatchQueue.main.async { [weak self] in
                     guard let self = self, self.isRecording, !self.isCancelling else { return }
                     self.restartRecognitionTask()
                 }
@@ -281,18 +399,36 @@ public final class SpeechManager: NSObject, SFSpeechRecognizerDelegate {
         }
     }
 
+    private func isSilenceOrTimeoutError(_ err: NSError) -> Bool {
+        if err.domain == "kAFAssistantErrorDomain" {
+            let silenceCodes: Set<Int> = [203, 209, 216, 1101, 1107, 1110]
+            if silenceCodes.contains(err.code) {
+                return true
+            }
+        }
+        let msg = err.localizedDescription.lowercased()
+        if msg.contains("timeout") || msg.contains("no speech") || msg.contains("retry") || msg.contains("cancelled") || msg.contains("interrupted") {
+            return true
+        }
+        return false
+    }
+
     private func restartRecognitionTask() {
         guard isRecording else { return }
 
-        isCancelling = true
-        recognitionRequest?.endAudio()
-        recognitionTask?.cancel()
-        recognitionTask = nil
-        isCancelling = false
+        let oldTask = self.recognitionTask
+        self.recognitionTask = nil
+        oldTask?.cancel()
 
         let newRequest = SFSpeechAudioBufferRecognitionRequest()
         configureRecognitionRequest(newRequest)
+
+        os_unfair_lock_lock(&requestLock)
+        let oldRequest = self.recognitionRequest
         self.recognitionRequest = newRequest
+        os_unfair_lock_unlock(&requestLock)
+
+        oldRequest?.endAudio()
 
         setupRecognitionTask()
     }
@@ -358,12 +494,21 @@ public final class SpeechManager: NSObject, SFSpeechRecognizerDelegate {
         isRecording = false
         stopCompletion = completion
 
+        rotationTimer?.invalidate()
+        rotationTimer = nil
+
         audioEngine.stop()
         audioEngine.inputNode.removeTap(onBus: 0)
-        recognitionRequest?.endAudio()
 
-        // Fallback watchdog: if Apple takes longer than 750ms to emit isFinal, complete cleanly
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.75) { [weak self] in
+        os_unfair_lock_lock(&requestLock)
+        let activeRequest = recognitionRequest
+        recognitionRequest = nil
+        os_unfair_lock_unlock(&requestLock)
+
+        activeRequest?.endAudio()
+
+        // Fallback watchdog: if Apple takes longer than 600ms to emit isFinal, complete cleanly
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
             guard let self = self, self.stopCompletion != nil else { return }
             self.finishStopRecording()
         }
@@ -387,14 +532,22 @@ public final class SpeechManager: NSObject, SFSpeechRecognizerDelegate {
 
     public func cleanupRecording() {
         isCancelling = true
+        rotationTimer?.invalidate()
+        rotationTimer = nil
+
         if audioEngine.isRunning {
             audioEngine.stop()
         }
         audioEngine.inputNode.removeTap(onBus: 0)
         audioEngine.reset()
-        recognitionRequest?.endAudio()
-        recognitionTask?.cancel()
+
+        os_unfair_lock_lock(&requestLock)
+        let req = recognitionRequest
         recognitionRequest = nil
+        os_unfair_lock_unlock(&requestLock)
+
+        req?.endAudio()
+        recognitionTask?.cancel()
         recognitionTask = nil
         isRecording = false
         consecutiveErrorCount = 0

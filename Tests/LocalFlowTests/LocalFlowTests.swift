@@ -352,5 +352,37 @@ final class LocalFlowTests: XCTestCase {
         }
         wait(for: [expectation], timeout: 2.0)
     }
+
+    func testSpeechManagerContinuityDetection() {
+        let manager = SpeechManager()
+        // Extension
+        XCTAssertTrue(manager.isUtteranceContinuation(existing: "hello world", incoming: "hello world how are you"))
+        // Prefix
+        XCTAssertTrue(manager.isUtteranceContinuation(existing: "hello world how are you", incoming: "hello world"))
+        // Acoustic revision
+        XCTAssertTrue(manager.isUtteranceContinuation(existing: "hello world this is text", incoming: "hello world this is test"))
+        // Disjoint utterance after pause
+        XCTAssertFalse(manager.isUtteranceContinuation(existing: "We are dictating a long paragraph about our system.", incoming: "Next step in our discussion."))
+    }
+
+    func testSpeechManagerStripOverlap() {
+        let manager = SpeechManager()
+        let result1 = manager.stripOverlap(previous: "testing LocalFlow", next: "LocalFlow on macOS")
+        XCTAssertEqual(result1, "on macOS")
+
+        let result2 = manager.stripOverlap(previous: "hello world", next: "hello world")
+        XCTAssertEqual(result2, "")
+
+        let result3 = manager.stripOverlap(previous: "first sentence", next: "second sentence")
+        XCTAssertEqual(result3, "second sentence")
+    }
+
+    func testSelfCorrectionsAdverbPreservation() {
+        let polisher = TextPolisher.shared
+        let raw = "I want to tell you about the feature that we actually launched last week."
+        let resolved = polisher.resolveSelfCorrections(raw)
+        XCTAssertTrue(resolved.contains("I want to tell you about the feature that we"))
+        XCTAssertTrue(resolved.contains("launched last week."))
+    }
 }
 
